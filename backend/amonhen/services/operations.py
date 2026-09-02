@@ -42,6 +42,7 @@ from amonhen.services.projection import EnsembleProjection, project
 from amonhen.services.spread import SpreadEstimate
 from amonhen.sources.elevation import ElevationSource, Terrain
 from amonhen.sources.firms import FirmsSource
+from amonhen.sources.landcover import LandCover, LandCoverSource
 from amonhen.sources.open_meteo import OpenMeteoSource
 
 log = get_logger(__name__)
@@ -65,6 +66,8 @@ class IncidentView:
     spread: SpreadEstimate | None
     #: Whether this behaves like a wildfire at all, or like industry.
     plausibility: Plausibility
+    #: What is growing here, and therefore what burns.
+    land_cover: LandCover | None
     #: Local ground shape from the Copernicus DEM. None when unavailable, which
     #: the projection reports rather than silently assuming flat.
     terrain: Terrain | None
@@ -102,6 +105,7 @@ class OperationsService:
         self.firms = FirmsSource()
         self.weather = OpenMeteoSource()
         self.elevation = ElevationSource()
+        self.land_cover = LandCoverSource()
         self._picture: OperationalPicture | None = None
         self._lock = asyncio.Lock()
 
@@ -156,6 +160,7 @@ class OperationsService:
                 self.firms.status(),
                 self.weather.status(),
                 self.elevation.status(),
+                self.land_cover.status(),
             ],
             dropped_outside_boundary=dropped_outside,
         )
@@ -179,9 +184,13 @@ class OperationsService:
         # Weather and terrain are independent lookups; fetch them together.
         # Terrain is cached for a month — the ground does not move — so after the
         # first pass this costs nothing.
-        (weather, danger), terrain = await asyncio.gather(
+        # Three independent lookups; fetch them together. Terrain and land cover
+        # are both cached for a month — neither the ground nor the vegetation
+        # survey changes between refreshes — so after the first pass this is free.
+        (weather, danger), terrain, cover = await asyncio.gather(
             self._local_fire_weather(incident.latitude, incident.longitude),
             self.elevation.terrain_at(incident.latitude, incident.longitude),
+            self.land_cover.cover_at(incident.latitude, incident.longitude),
         )
         if weather is not None and danger is not None:
             weather.ffmc, weather.dmc, weather.dc = danger.ffmc, danger.dmc, danger.dc
@@ -202,9 +211,10 @@ class OperationsService:
             danger=danger,
             exposed=exposed,
             spread=spread,
-            plausibility=assess(detections),
+            plausibility=assess(detections, land_cover=cover),
             terrain=terrain,
-            projection=project(incident, weather, exposed, terrain=terrain),
+            land_cover=cover,
+            projection=project(incident, weather, exposed, terrain=terrain, land_cover=cover),
             brief=summarise(incident, exposed, spread, terrain=terrain),
         )
 

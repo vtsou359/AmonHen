@@ -30,6 +30,7 @@ async def status() -> SystemStatus:
         SourceStatus(**operations.firms.status()),
         SourceStatus(**operations.weather.status()),
         SourceStatus(**operations.elevation.status()),
+        SourceStatus(**operations.land_cover.status()),
     ]
     any_fixture = any(s.mode == "fixture" for s in sources)
 

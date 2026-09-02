@@ -219,6 +219,15 @@ export interface TerrainSummary {
   source: string;
 }
 
+export interface LandCoverSummary {
+  code: string;
+  label: string;
+  /** null when nothing here can carry a fire. */
+  fuel: string | null;
+  burnable: boolean;
+  source: string;
+}
+
 export interface ProjectionSummary {
   incident_id: string;
   generated_at: string;
@@ -227,5 +236,6 @@ export interface ProjectionSummary {
   envelope_areas_ha: Record<string, number>;
   threats: ThreatSummary[];
   terrain: TerrainSummary | null;
+  land_cover: LandCoverSummary | null;
   caveats: string[];
 }

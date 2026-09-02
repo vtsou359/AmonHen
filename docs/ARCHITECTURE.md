@@ -187,6 +187,20 @@ mayor afterwards. The honesty is in the naming, not the sample count. For the
 same reason the output is called a *likelihood* only in the narrow sense of "how
 many of our assumptions lead here", never a probability.
 
+**Fuel is measured, not assumed.** Until CORINE was wired in, every projection
+in the country used one fuel model — "maquis" — with coefficients derived for
+Canadian boreal forest. An Aleppo pine stand and a ploughed field produced
+identical spread. Now each fire's scenarios inherit the vegetation actually
+mapped at its location, and the two explicit fuel cases (`light_fuel`,
+`heavy_fuel`) become perturbations *around* that measurement rather than guesses
+in place of one.
+
+The land cover is also the only independent input to the fire/not-fire test.
+Everything else in that scoring — heat output, time of day, persistence — is a
+property of the same satellite pixels that raised the alarm. Whether the ground
+can burn at all comes from somewhere else entirely, and it is what exposed the
+Parnitha and Thessaloniki detections as a quarry and an industrial site.
+
 **Terrain is measured, not assumed.** An earlier version of the ensemble carried
 a scenario called "upslope" that applied a guessed 25% grade. That is now
 replaced by the real thing: every scenario uses the Copernicus DEM slope *in its

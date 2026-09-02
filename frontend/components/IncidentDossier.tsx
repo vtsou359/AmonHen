@@ -7,6 +7,7 @@ import { formatArea, formatLeadTime, formatRelative, titleCase } from "@/lib/for
 import { DANGER_HEX } from "@/lib/palette";
 import {
   DANGER_LABEL,
+  FUEL_LABEL,
   FWI_CODE,
   STATUS_LABEL,
   VERDICT_HINT,
@@ -377,6 +378,28 @@ function ProjectionSection({
           )}
         </div>
       </div>
+
+      {projection.land_cover && (
+        <div className="mt-3 flex items-baseline justify-between gap-2 border-t border-edge-faint pt-2.5">
+          <div className="min-w-0">
+            <div className="label">What&apos;s growing</div>
+            <div className="truncate text-xs text-ink">{projection.land_cover.label}</div>
+          </div>
+          <div
+            className="shrink-0 text-right text-2xs leading-tight text-ink-faint"
+            title={`From ${projection.land_cover.source}. 100 m resolution, surveyed 2018 — the landscape, not this season's crop.`}
+          >
+            {projection.land_cover.burnable ? (
+              <>burns like
+                <br />
+                {FUEL_LABEL[projection.land_cover.fuel ?? ""] ?? projection.land_cover.fuel}
+              </>
+            ) : (
+              <span className="text-severity-moderate">nothing to burn</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {projection.terrain && (
         <div className="mt-3 flex items-baseline justify-between gap-2 border-t border-edge-faint pt-2.5">

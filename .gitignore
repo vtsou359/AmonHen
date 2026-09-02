@@ -13,6 +13,7 @@ node_modules/
 .next/
 out/
 next-env.d.ts
+*.tsbuildinfo
 
 # Staged from node_modules at build time — see scripts/copy-maplibre-worker.mjs
 frontend/public/maplibre/

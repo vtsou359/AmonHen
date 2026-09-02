@@ -37,6 +37,7 @@ from amonhen.domain.entities import ExposedElement, Incident, WeatherObservation
 from amonhen.services.gazetteer import bearing_deg, haversine_km
 from amonhen.services.fire_weather import initial_spread_index
 from amonhen.sources.elevation import Terrain
+from amonhen.sources.landcover import LandCover
 from amonhen.services.spread import DEFAULT_FUEL, SpreadEstimate, estimate_spread
 
 log = get_logger(__name__)
@@ -56,7 +57,9 @@ class Scenario:
     label: str
     #: What this scenario is testing, in plain words — shown in the UI.
     rationale: str
-    fuel: str
+    #: None means "use the fuel measured at the fire". An explicit value
+    #: overrides it, which is how the fuel-uncertainty cases work.
+    fuel: str | None
     wind_speed_factor: float = 1.0
     wind_direction_offset_deg: float = 0.0
     #: When True the fire is assumed to follow the hill rather than the wind.
@@ -72,35 +75,38 @@ class Scenario:
 #: small: every scenario earns its place by testing something an analyst would
 #: otherwise have to ask about.
 SCENARIOS: tuple[Scenario, ...] = (
-    Scenario("expected", "Most likely", "Current wind and the measured slope.", DEFAULT_FUEL),
+    Scenario("expected", "Most likely", "Current wind, measured slope and the vegetation actually here.", None),
     Scenario(
         "veer_left", "Wind shifts left", "Wind turns 30° to the left.",
-        DEFAULT_FUEL, wind_direction_offset_deg=-30.0,
+        None, wind_direction_offset_deg=-30.0,
     ),
     Scenario(
         "veer_right", "Wind shifts right", "Wind turns 30° to the right.",
-        DEFAULT_FUEL, wind_direction_offset_deg=30.0,
+        None, wind_direction_offset_deg=30.0,
     ),
     Scenario(
         "gusting", "Stronger wind", "Wind 40% stronger than forecast.",
-        DEFAULT_FUEL, wind_speed_factor=1.4,
+        None, wind_speed_factor=1.4,
     ),
     Scenario(
         "easing", "Weaker wind", "Wind 30% weaker than forecast — the hopeful case.",
-        DEFAULT_FUEL, wind_speed_factor=0.7,
+        None, wind_speed_factor=0.7,
     ),
+    # The two fuel cases stay explicit. Land cover is 100 m data from 2018 with a
+    # 25 ha minimum patch, so the vegetation at any given fire may well not be
+    # what the map says. These bracket that.
     Scenario(
-        "light_fuel", "Drier, lighter scrub", "Low scrub burns faster than expected.",
+        "light_fuel", "Drier, lighter scrub", "If the ground is really low scrub, it runs faster.",
         "phrygana",
     ),
     Scenario(
-        "heavy_fuel", "Denser forest", "Pine forest: a slower front, but far more heat.",
+        "heavy_fuel", "Denser forest", "If it is really pine forest: slower front, far more heat.",
         "pine",
     ),
     Scenario(
         "terrain_driven", "Runs up the hill",
         "In light wind a fire follows the slope instead. This one climbs.",
-        DEFAULT_FUEL, terrain_driven=True,
+        None, terrain_driven=True,
     ),
     Scenario(
         "worst_case", "Worst case",
@@ -116,6 +122,9 @@ class ScenarioProjection:
 
     scenario: Scenario
     spread: SpreadEstimate
+    #: The fuel this case actually ran with — the measured one unless the
+    #: scenario overrode it. Reported so the dossier can say which is which.
+    fuel_used: str = DEFAULT_FUEL
     #: horizon minutes -> GeoJSON polygon
     footprints: dict[int, dict[str, Any]] = field(default_factory=dict)
     areas_ha: dict[int, float] = field(default_factory=dict)
@@ -164,6 +173,7 @@ class EnsembleProjection:
     core: dict[int, dict[str, Any]] = field(default_factory=dict)
     threats: list[ThreatOutcome] = field(default_factory=list)
     terrain: Terrain | None = None
+    land_cover: LandCover | None = None
     caveats: list[str] = field(default_factory=list)
 
 
@@ -237,6 +247,7 @@ def project(
     exposed: list[ExposedElement] | None = None,
     horizons_minutes: tuple[int, ...] = DEFAULT_HORIZONS_MINUTES,
     terrain: Terrain | None = None,
+    land_cover: LandCover | None = None,
 ) -> EnsembleProjection | None:
     """Run every scenario and summarise where they agree and disagree.
 
@@ -248,6 +259,10 @@ def project(
 
     from shapely.geometry import mapping
     from shapely.ops import unary_union
+
+    # The fuel actually on the ground, when we know it. Scenarios that name a
+    # fuel explicitly override this; the rest inherit it.
+    measured_fuel = (land_cover.fuel if land_cover and land_cover.fuel else None) or DEFAULT_FUEL
 
     base_wind_speed = weather.wind_speed_kmh or 0.0
     base_direction = weather.wind_direction_deg
@@ -291,10 +306,12 @@ def project(
             isi=scenario_isi,
             wind_direction_deg=wind_direction_for_model,
             wind_speed_kmh=scenario_wind,
-            fuel=scenario.fuel,
+            fuel=scenario.fuel or measured_fuel,
             slope_pct=scenario_slope,
         )
-        projection = ScenarioProjection(scenario=scenario, spread=spread)
+        projection = ScenarioProjection(
+            scenario=scenario, spread=spread, fuel_used=scenario.fuel or measured_fuel
+        )
         for minutes in horizons_minutes:
             footprint = _ellipse_footprint(
                 incident.latitude, incident.longitude, spread, float(minutes)
@@ -340,7 +357,8 @@ def project(
         core=core,
         threats=threats,
         terrain=terrain,
-        caveats=_caveats(terrain),
+        land_cover=land_cover,
+        caveats=_caveats(terrain, land_cover),
     )
     log.info(
         "projection.complete",
@@ -351,7 +369,7 @@ def project(
     return result
 
 
-def _caveats(terrain: Terrain | None) -> list[str]:
+def _caveats(terrain: Terrain | None, land_cover: LandCover | None = None) -> list[str]:
     """Plain-language limits, stated where the reader will see them."""
     lines = [
         "Shows where fire could spread, not where it will. Roads, rivers, "
@@ -361,6 +379,19 @@ def _caveats(terrain: Terrain | None) -> list[str]:
         "The shaded area is 'could reach'. The smaller core is the part every "
         "scenario agrees on.",
     ]
+    if land_cover is not None and land_cover.fuel:
+        lines.insert(
+            0,
+            f"Vegetation here is mapped as {land_cover.descriptor}, from the European "
+            f"land cover survey (100 m, 2018) — so it may not match this season exactly.",
+        )
+    else:
+        lines.insert(
+            0,
+            "No vegetation data for this spot, so a Mediterranean shrubland is assumed. "
+            "Pine forest would burn hotter and farmland far less.",
+        )
+
     if terrain is None or terrain.sample_count == 0:
         lines.insert(
             0,

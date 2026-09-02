@@ -8,6 +8,7 @@ from amonhen.api.schemas import (
     FwiSummary,
     IncidentDetail,
     IncidentSummary,
+    LandCoverSummary,
     PictureResponse,
     PlausibilitySummary,
     ProjectionSummary,
@@ -102,7 +103,7 @@ def _to_projection(view: IncidentView) -> ProjectionSummary | None:
                 id=p.scenario.id,
                 label=p.scenario.label,
                 rationale=p.scenario.rationale,
-                fuel=p.scenario.fuel,
+                fuel=p.fuel_used,
                 head_ros_m_per_min=p.spread.head_ros_m_per_min,
                 direction_deg=p.spread.direction_deg,
                 direction_label=p.spread.direction_label,
@@ -128,6 +129,17 @@ def _to_projection(view: IncidentView) -> ProjectionSummary | None:
             )
             for t in projection.threats
         ],
+        land_cover=(
+            LandCoverSummary(
+                code=projection.land_cover.code,
+                label=projection.land_cover.label,
+                fuel=projection.land_cover.fuel,
+                burnable=projection.land_cover.burnable,
+                source=projection.land_cover.source,
+            )
+            if projection.land_cover is not None and projection.land_cover.code
+            else None
+        ),
         terrain=(
             TerrainSummary(
                 elevation_m=projection.terrain.elevation_m,
