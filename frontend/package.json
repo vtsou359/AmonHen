@@ -1,0 +1,33 @@
+{
+  "name": "amonhen-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/copy-maplibre-worker.mjs",
+    "dev": "next dev -p 3000",
+    "prebuild": "node scripts/copy-maplibre-worker.mjs",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deck.gl/core": "9.3.10",
+    "@deck.gl/layers": "9.3.10",
+    "@deck.gl/mapbox": "9.3.10",
+    "clsx": "2.1.1",
+    "maplibre-gl": "6.6.0",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "swr": "2.5.1",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "tailwindcss": "4.3.3",
+    "@tailwindcss/postcss": "4.3.3"
+  }
+}

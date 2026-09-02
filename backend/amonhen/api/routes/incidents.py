@@ -1,0 +1,209 @@
+"""Incident endpoints — the operational picture and individual fire dossiers."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+
+from amonhen.api.schemas import (
+    FwiSummary,
+    IncidentDetail,
+    IncidentSummary,
+    PictureResponse,
+    PlausibilitySummary,
+    ProjectionSummary,
+    ScenarioSummary,
+    TerrainSummary,
+    SpreadSummary,
+    ThreatSummary,
+)
+from amonhen.services.operations import IncidentView, operations
+
+router = APIRouter(prefix="/incidents", tags=["incidents"])
+
+
+@router.get("", response_model=PictureResponse, summary="Current operational picture")
+async def list_incidents(
+    max_age_seconds: int = Query(600, ge=0, le=3600, description="Accept a cached picture this old"),
+    status: str | None = Query(None, description="Filter by incident status"),
+    min_area_ha: float = Query(0.0, ge=0.0),
+    include_suspect: bool = Query(
+        True,
+        description=(
+            "Include detections that behave more like industry than wildfire. "
+            "Default True: hiding them by default would silently drop real fires "
+            "that happen to look odd."
+        ),
+    ),
+) -> PictureResponse:
+    picture = await operations.get_picture(max_age_seconds=max_age_seconds)
+
+    views = picture.incidents
+    if status:
+        views = [v for v in views if v.incident.status.value == status]
+    if min_area_ha:
+        views = [v for v in views if v.incident.estimated_area_ha >= min_area_ha]
+    suspect_count = sum(1 for v in views if v.plausibility.is_suspect)
+    if not include_suspect:
+        views = [v for v in views if not v.plausibility.is_suspect]
+
+    return PictureResponse(
+        generated_at=picture.generated_at,
+        area_of_interest=picture.area_of_interest,
+        active_count=picture.active_count,
+        total_incidents=len(views),
+        total_area_ha=picture.total_area_ha,
+        unclustered_detections=len(picture.unclustered),
+        dropped_outside_boundary=picture.dropped_outside_boundary,
+        suspect_count=suspect_count,
+        incidents=[_to_summary(v) for v in views],
+        sources=picture.source_status,
+    )
+
+
+@router.get("/{incident_id}", response_model=IncidentDetail, summary="Full incident dossier")
+async def get_incident(incident_id: str) -> IncidentDetail:
+    view = await _find(incident_id)
+    return IncidentDetail(
+        incident=view.incident,
+        perimeter=view.perimeter,
+        weather=view.weather,
+        danger=FwiSummary(**vars(view.danger)) if view.danger else None,
+        spread=SpreadSummary(**vars(view.spread)) if view.spread else None,
+        exposed=view.exposed,
+        projection=_to_projection(view),
+        plausibility=PlausibilitySummary(
+            verdict=view.plausibility.verdict,
+            score=view.plausibility.score,
+            reasons=view.plausibility.reasons,
+            signals=view.plausibility.signals,
+        ),
+        brief=view.brief,
+        detection_count=len(view.detections),
+    )
+
+
+def _to_projection(view: IncidentView) -> ProjectionSummary | None:
+    """Flatten the ensemble for transport.
+
+    Footprint geometry is deliberately left out: it is large, and the map fetches
+    it from /layers/projections where it can be refreshed independently of the
+    dossier text.
+    """
+    projection = view.projection
+    if projection is None:
+        return None
+
+    return ProjectionSummary(
+        incident_id=projection.incident_id,
+        generated_at=projection.generated_at,
+        horizons_minutes=list(projection.horizons_minutes),
+        scenarios=[
+            ScenarioSummary(
+                id=p.scenario.id,
+                label=p.scenario.label,
+                rationale=p.scenario.rationale,
+                fuel=p.scenario.fuel,
+                head_ros_m_per_min=p.spread.head_ros_m_per_min,
+                direction_deg=p.spread.direction_deg,
+                direction_label=p.spread.direction_label,
+                areas_ha=p.areas_ha,
+            )
+            for p in projection.projections
+        ],
+        envelope_areas_ha=projection.envelope_areas_ha,
+        threats=[
+            ThreatSummary(
+                name=t.name,
+                kind=t.kind,
+                latitude=t.latitude,
+                longitude=t.longitude,
+                distance_km=t.distance_km,
+                population=t.population,
+                hit_count=t.hit_count,
+                scenario_count=t.scenario_count,
+                likelihood=t.likelihood,
+                earliest_minutes=t.earliest_minutes,
+                median_minutes=t.median_minutes,
+                scenarios_hit=t.scenarios_hit,
+            )
+            for t in projection.threats
+        ],
+        terrain=(
+            TerrainSummary(
+                elevation_m=projection.terrain.elevation_m,
+                slope_pct=projection.terrain.slope_pct,
+                aspect_deg=projection.terrain.aspect_deg,
+                relief_m=projection.terrain.relief_m,
+                descriptor=projection.terrain.descriptor,
+                source=projection.terrain.source,
+            )
+            if projection.terrain is not None
+            else None
+        ),
+        caveats=projection.caveats,
+    )
+
+
+@router.post("/refresh", response_model=PictureResponse, summary="Force a rebuild")
+async def refresh(day_range: int = Query(3, ge=1, le=5)) -> PictureResponse:
+    """Re-run the whole chain now, ignoring every cache.
+
+    Bounded to 1-5 days, which is FIRMS' real limit for the area endpoint —
+    not the 1-10 this once claimed. Asking for more returns the plain text
+    "Invalid day range. Expects [1..5]." with an HTTP 200, which the connector
+    catches and treats as an empty product; the net effect was a silent loss of
+    every detection rather than an error.
+    """
+    picture = await operations.rebuild(day_range=day_range, force=True)
+    operations._picture = picture  # noqa: SLF001 — deliberate cache priming
+    return PictureResponse(
+        generated_at=picture.generated_at,
+        area_of_interest=picture.area_of_interest,
+        active_count=picture.active_count,
+        total_incidents=len(picture.incidents),
+        total_area_ha=picture.total_area_ha,
+        unclustered_detections=len(picture.unclustered),
+        dropped_outside_boundary=picture.dropped_outside_boundary,
+        suspect_count=sum(1 for v in picture.incidents if v.plausibility.is_suspect),
+        incidents=[_to_summary(v) for v in picture.incidents],
+        sources=picture.source_status,
+    )
+
+
+async def _find(incident_id: str) -> IncidentView:
+    picture = await operations.get_picture()
+    for view in picture.incidents:
+        if view.incident.id == incident_id:
+            return view
+    raise HTTPException(status_code=404, detail=f"No incident {incident_id} in the current picture")
+
+
+def _to_summary(view: IncidentView) -> IncidentSummary:
+    incident = view.incident
+    # Surface the single most urgent downwind threat, so the list view can be
+    # scanned for "who needs to move" without opening every dossier.
+    downwind = sorted(
+        (e for e in view.exposed if e.minutes_to_impact is not None and e.is_downwind),
+        key=lambda e: e.minutes_to_impact or 0.0,
+    )
+    top = downwind[0] if downwind else None
+
+    return IncidentSummary(
+        id=incident.id,
+        name=incident.name,
+        status=incident.status.value,
+        severity=incident.severity.value,
+        latitude=incident.latitude,
+        longitude=incident.longitude,
+        estimated_area_ha=incident.estimated_area_ha,
+        growth_rate_ha_per_hour=incident.growth_rate_ha_per_hour,
+        max_frp_mw=incident.max_frp_mw,
+        detection_count=incident.detection_count,
+        first_detected_at=incident.first_detected_at,
+        last_detected_at=incident.last_detected_at,
+        danger_class=view.danger.danger_class if view.danger else None,
+        top_threat=top.name if top else None,
+        minutes_to_top_threat=top.minutes_to_impact if top else None,
+        verdict=view.plausibility.verdict,
+        verdict_score=view.plausibility.score,
+    )

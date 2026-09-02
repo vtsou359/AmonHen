@@ -1,0 +1,77 @@
+name: amonhen
+
+services:
+  api:
+    build:
+      context: ./backend
+    container_name: amonhen-api
+    ports:
+      # Bound to loopback, not 0.0.0.0. Docker publishes to every interface by
+      # default, which would put an unauthenticated API — including a POST that
+      # triggers upstream NASA fetches against your quota — on the local network
+      # (café wifi, conference wifi, a shared office). Nothing needs to reach it
+      # except the browser on this machine.
+      - "127.0.0.1:8000:8000"
+    environment:
+      AMONHEN_ENVIRONMENT: local
+      AMONHEN_CORS_ORIGINS: '["http://localhost:3000"]'
+      # Optional. Without it the platform serves bundled fixtures and says so.
+      AMONHEN_FIRMS_MAP_KEY: ${AMONHEN_FIRMS_MAP_KEY:-}
+      AMONHEN_POSTGRES_HOST: postgres
+      AMONHEN_DATA_DIR: /data
+    volumes:
+      # Source is mounted for hot reload; data/ holds the fixture + HTTP cache.
+      - ./backend/amonhen:/app/amonhen:ro
+      # Mounted too, so a newly written script can be run without a rebuild.
+      - ./backend/scripts:/app/scripts:ro
+      - ./data:/data
+    command: >
+      uvicorn amonhen.main:app --host 0.0.0.0 --port 8000 --reload
+      --reload-dir /app/amonhen
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: amonhen-web
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000/api/v1
+      WATCHPACK_POLLING: "true"   # bind mounts on macOS do not deliver inotify
+    volumes:
+      - ./frontend:/app
+      # Anonymous volumes mask the host directory, so node_modules and .next
+      # stay inside the container: the repo stays small and Linux-native
+      # binaries never collide with anything installed on the Mac.
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Persistence is not wired into the API yet — the live picture is rebuilt in
+  # memory each cycle. Postgres is here so history work can start immediately:
+  #     docker compose --profile persistence up
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: amonhen-postgres
+    profiles: ["persistence"]
+    environment:
+      POSTGRES_USER: amonhen
+      POSTGRES_PASSWORD: amonhen
+      POSTGRES_DB: amonhen
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amonhen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

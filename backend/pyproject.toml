@@ -1,0 +1,74 @@
+[project]
+name = "amonhen"
+version = "0.1.0"
+description = "Amon Hen — fire intelligence platform for the full fire management cycle"
+requires-python = ">=3.11"
+
+dependencies = [
+    # --- API layer -------------------------------------------------------
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "geojson-pydantic>=1.1",
+
+    # --- Persistence -----------------------------------------------------
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "geoalchemy2>=0.15",
+    "alembic>=1.14",
+
+    # --- Data / science --------------------------------------------------
+    "numpy>=2.1",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "scipy>=1.14",
+    "shapely>=2.0",
+
+    # --- Fetching & scheduling -------------------------------------------
+    "httpx>=0.27",
+    "apscheduler>=3.10",
+    "tenacity>=9.0",
+
+    # --- Ops -------------------------------------------------------------
+    "structlog>=24.4",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+# Raster/Earth-observation stack. Not needed for the active-response slice
+# (detections are point data), so it is kept out of the default image to save
+# ~500 MB and several minutes of build time. Enable it when we build the
+# post-fire severity + recovery modules:  uv pip install -e ".[eo]"
+eo = [
+    "rasterio>=1.4",
+    "rioxarray>=0.17",
+    "xarray>=2024.10",
+    "netcdf4>=1.7",
+    "pystac-client>=0.8",
+    "odc-stac>=0.3",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amonhen"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

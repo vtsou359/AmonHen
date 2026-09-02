@@ -1,0 +1,33 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# --- Node -----------------------------------------------------------------
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# Staged from node_modules at build time — see scripts/copy-maplibre-worker.mjs
+frontend/public/maplibre/
+
+# --- Secrets --------------------------------------------------------------
+.env
+.env.local
+*.pem
+
+# --- Runtime data ---------------------------------------------------------
+# Fixtures are committed (they are the zero-setup demo); the HTTP cache is not.
+data/cache/
+
+# --- macOS / iCloud -------------------------------------------------------
+.DS_Store
+.AppleDouble
+Icon?
+*.icloud
