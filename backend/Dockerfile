@@ -14,18 +14,35 @@ ENV PYTHONUNBUFFERED=1 \
 # HIGH advisories (perl, tar) that Debian has patched but not yet rebuilt into
 # the published image. None are reachable from this application, but an
 # emergency-response tool should not ship known-fixable CVEs.
+#
+# libexpat1 is installed alongside: the rasterio wheel links against it, and
+# python:*-slim does not ship it. Without it the optional [eo] extra installs
+# cleanly and then fails at import with a bare "libexpat.so.1: cannot open
+# shared object file", which reads like a broken build rather than a missing
+# system library. ~100 KB to make `uv pip install rasterio` work in a running
+# container without rebuilding the image.
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends libexpat1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Set to "true" to bake in the Sentinel-2 raster stack (burned-area mapping and
+# live fuel moisture). Off by default: it pulls GDAL in through rasterio, which
+# measures 165 MB on top of the base image (867 MB -> 1.03 GB), and every other
+# feature works without it. Turn it on with:
+#
+#     docker compose build --build-arg INSTALL_EO=true api
+#
+# or by setting AMONHEN_INSTALL_EO=true in .env — see docker-compose.yml.
+ARG INSTALL_EO=false
 
 # Dependencies first, in their own layer: source edits then rebuild in seconds
 # instead of re-resolving the whole tree.
 #
 # Installed straight from pyproject.toml rather than a hand-written list, so
 # adding a dependency in one place cannot silently leave the image behind.
-# The [eo] raster extra is deliberately excluded — see pyproject.toml.
 COPY pyproject.toml ./
 # Install with uv, then remove pip entirely.
 #
@@ -38,6 +55,9 @@ COPY pyproject.toml ./
 # Note for later: `uv pip` is a standalone binary and does NOT depend on pip, so
 # `make test` (which installs pytest into the container) still works.
 RUN uv pip install --system --no-cache -r pyproject.toml \
+ && if [ "$INSTALL_EO" = "true" ]; then \
+      uv pip install --system --no-cache --extra eo -r pyproject.toml; \
+    fi \
  && uv pip uninstall --system pip 2>/dev/null || true \
  && rm -rf /usr/local/lib/python3.12/site-packages/pip \
            /usr/local/lib/python3.12/site-packages/pip-*.dist-info \

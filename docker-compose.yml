@@ -4,6 +4,11 @@ services:
   api:
     build:
       context: ./backend
+      args:
+        # Set AMONHEN_INSTALL_EO=true in .env to bake in the Sentinel-2 raster
+        # stack, which turns on burned-area mapping and live fuel moisture.
+        # Off by default: it adds 165 MB and a couple of minutes to the build.
+        INSTALL_EO: ${AMONHEN_INSTALL_EO:-false}
     container_name: amonhen-api
     ports:
       # Bound to loopback, not 0.0.0.0. Docker publishes to every interface by

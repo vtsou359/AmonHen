@@ -26,9 +26,21 @@ export interface IncidentSummary {
   danger_class: DangerClass | null;
   top_threat: string | null;
   minutes_to_top_threat: number | null;
+  /** How the area was arrived at — a thermal-pixel lower bound, or a measurement. */
+  area_source: AreaSource;
   verdict: Verdict;
   verdict_score: number;
 }
+
+/**
+ * The two ways a burnt area can be known, which are not the same kind of number.
+ *
+ * `thermal_pixels` counts distinct 375 m satellite footprints and is explicitly
+ * a lower bound — fire that burned between overpasses is invisible to it.
+ * `sentinel2_dnbr` is a 20 m burn-scar measurement. The UI marks which is which
+ * rather than printing both as plain hectares.
+ */
+export type AreaSource = "thermal_pixels" | "sentinel2_dnbr";
 
 export type Verdict = "wildfire" | "probable" | "questionable" | "likely_not_wildfire";
 
@@ -45,6 +57,8 @@ export interface SourceStatus {
   attribution: string;
   homepage: string;
   requires_credentials: boolean;
+  /** Set when a source needs something the operator can act on. */
+  note?: string | null;
 }
 
 export interface PictureResponse {
@@ -117,6 +131,8 @@ export interface IncidentDetail {
   exposed: ExposedElement[];
   projection: ProjectionSummary | null;
   plausibility: PlausibilitySummary | null;
+  burn_scar: BurnScarSummary | null;
+  burn_scar_unavailable: BurnScarUnavailableSummary | null;
   brief: string;
   detection_count: number;
 }
@@ -187,6 +203,8 @@ export interface ScenarioSummary {
   label: string;
   rationale: string;
   fuel: string;
+  /** Live fuel moisture this case ran with, % oven-dry weight. */
+  live_moisture_pct: number | null;
   head_ros_m_per_min: number;
   direction_deg: number;
   direction_label: string;
@@ -228,6 +246,55 @@ export interface LandCoverSummary {
   source: string;
 }
 
+/** Key & Benson dNBR severity classes. */
+export type BurnSeverity = "unburned" | "low" | "moderate_low" | "moderate_high" | "high";
+
+/** A burn scar measured from Sentinel-2 imagery at 20 m. */
+export interface BurnScarSummary {
+  burned_area_ha: number;
+  mean_dnbr: number;
+  /** dNBR normalised by how much there was to burn — higher in sparse cover. */
+  mean_rdnbr: number;
+  severity_ha: Partial<Record<BurnSeverity, number>>;
+  dominant_severity: BurnSeverity;
+  pre_image_date: string;
+  post_image_date: string;
+  usable_fraction: number;
+  confidence: number;
+  /** True while the fire was still burning when the image was taken. */
+  is_partial: boolean;
+  note: string;
+}
+
+/**
+ * Why there is no measured burned area.
+ *
+ * Carried explicitly rather than as a null: "the satellite has not passed over
+ * yet" and "this is not a fire" look identical as an absence, and an operator
+ * reading a thermal estimate needs to know whether a better number is coming.
+ */
+export interface BurnScarUnavailableSummary {
+  reason: string;
+  detail: string;
+  /** True when a later satellite pass resolves it on its own. */
+  transient: boolean;
+}
+
+/** How wet the living vegetation around a fire is, from Sentinel-2 NDMI. */
+export interface FuelMoistureSummary {
+  ndmi: number;
+  ndvi: number;
+  live_moisture_pct: number;
+  /** Plain words — "tinder dry", "green". */
+  descriptor: string;
+  greenness: string;
+  /** Multiplier applied to the spread rate. 1.0 means no correction. */
+  spread_factor: number;
+  observed_at: string;
+  sample_pixels: number;
+  source: string;
+}
+
 export interface ProjectionSummary {
   incident_id: string;
   generated_at: string;
@@ -237,5 +304,6 @@ export interface ProjectionSummary {
   threats: ThreatSummary[];
   terrain: TerrainSummary | null;
   land_cover: LandCoverSummary | null;
+  fuel_moisture: FuelMoistureSummary | null;
   caveats: string[];
 }

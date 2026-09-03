@@ -62,6 +62,10 @@ class IncidentDetail(BaseModel):
     exposed: list[ExposedElement] = Field(default_factory=list)
     projection: "ProjectionSummary | None" = None
     plausibility: PlausibilitySummary | None = None
+    #: The measured burn scar, when imagery was available.
+    burn_scar: BurnScarSummary | None = None
+    #: Why there is no measured burn scar, when there is not.
+    burn_scar_unavailable: BurnScarUnavailableSummary | None = None
     brief: str = ""
     detection_count: int = 0
 
@@ -84,6 +88,10 @@ class IncidentSummary(BaseModel):
     danger_class: DangerClass | None = None
     top_threat: str | None = None
     minutes_to_top_threat: float | None = None
+    #: "thermal_pixels" (a lower bound counted from 375 m heat detections) or
+    #: "sentinel2_dnbr" (measured from 20 m imagery). The list view marks the
+    #: difference, because the two are not the same kind of number.
+    area_source: str = "thermal_pixels"
     #: "wildfire" | "probable" | "questionable" | "likely_not_wildfire"
     verdict: str = "probable"
     verdict_score: float = 0.5
@@ -130,6 +138,9 @@ class SourceStatus(BaseModel):
     attribution: str
     homepage: str
     requires_credentials: bool
+    #: Set when a source needs something the operator can act on — currently
+    #: only Sentinel-2, which is inert until the raster extra is installed.
+    note: str | None = None
 
 
 class SystemStatus(BaseModel):
@@ -171,6 +182,9 @@ class ScenarioSummary(BaseModel):
     label: str
     rationale: str
     fuel: str
+    #: Live fuel moisture this case ran with, % of oven-dry weight. None when
+    #: no Sentinel-2 observation was available.
+    live_moisture_pct: float | None = None
     head_ros_m_per_min: float
     direction_deg: float
     direction_label: str
@@ -218,6 +232,59 @@ class LandCoverSummary(BaseModel):
     source: str
 
 
+class BurnScarSummary(BaseModel):
+    """Burned area measured from Sentinel-2, at 20 m."""
+
+    burned_area_ha: float
+    mean_dnbr: float
+    #: Relative dNBR — dNBR normalised by how much there was to burn. Higher
+    #: than dNBR in sparse vegetation, which is where dNBR under-reads.
+    mean_rdnbr: float
+    #: Hectares in each Key & Benson severity class.
+    severity_ha: dict[str, float] = Field(default_factory=dict)
+    dominant_severity: str
+    pre_image_date: datetime
+    post_image_date: datetime
+    #: Fraction of the area that was clear of cloud in both images.
+    usable_fraction: float
+    confidence: float
+    #: True while the fire was still burning when the image was taken, so this
+    #: is the area burnt so far rather than a final figure.
+    is_partial: bool = False
+    note: str = ""
+
+
+class BurnScarUnavailableSummary(BaseModel):
+    """Why there is no measured burned area.
+
+    Carried explicitly rather than left as a null. "The satellite has not passed
+    over yet" and "this is switched off" look identical as an absence, and the
+    operator needs to tell them apart before deciding whether to trust the
+    thermal estimate they are being shown instead.
+    """
+
+    reason: str
+    detail: str = ""
+    #: True when a later satellite pass will resolve it on its own.
+    transient: bool = True
+
+
+class FuelMoistureSummary(BaseModel):
+    """How wet the living vegetation around a fire is, from Sentinel-2."""
+
+    ndmi: float
+    ndvi: float
+    live_moisture_pct: float
+    #: Plain words — "tinder dry", "green".
+    descriptor: str
+    greenness: str
+    #: Multiplier applied to the spread rate. 1.0 means no correction.
+    spread_factor: float
+    observed_at: datetime
+    sample_pixels: int
+    source: str
+
+
 class ProjectionSummary(BaseModel):
     incident_id: str
     generated_at: datetime
@@ -227,4 +294,5 @@ class ProjectionSummary(BaseModel):
     threats: list[ThreatSummary]
     terrain: TerrainSummary | None = None
     land_cover: LandCoverSummary | None = None
+    fuel_moisture: FuelMoistureSummary | None = None
     caveats: list[str]

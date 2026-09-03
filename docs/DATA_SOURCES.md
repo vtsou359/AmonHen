@@ -119,6 +119,82 @@ A plane fit rather than a central difference so one noisy DEM cell cannot swing
 the result. Cached for 30 days, and deliberately exempt from the Refresh
 button's cache bypass — the ground does not move.
 
+### Copernicus Sentinel-2 — burned area, severity and live fuel moisture
+**Keyless.** Earth Search STAC (`https://earth-search.aws.element84.com/v1`)
+over the public `sentinel-cogs` AWS bucket. Needs the optional `[eo]` extra.
+
+Three products from one windowed read, at 20 m:
+
+```
+NBR   = (B8A - B12) / (B8A + B12)        dNBR = NBR_before - NBR_after   burn scar
+NDMI  = (B8A - B11) / (B8A + B11)                                        live fuel moisture
+NDVI  = (B8A - B04) / (B8A + B04)                                        greenness / curing
+```
+
+Severity is classified by the Key & Benson dNBR thresholds already in
+`domain/enums.py` (`BurnSeverity`). Cloud-Optimized GeoTIFFs mean nothing is
+downloaded: GDAL range-requests only the tiles covering the fire, a few megabytes
+instead of the ~1 GB granule.
+
+**Why AWS rather than the Copernicus Data Space Ecosystem.** Same ESA pixels,
+same processing baseline, no credential — which is the rule every source in this
+project follows. CDSE stays the right answer the day we need bulk download or a
+product AWS does not mirror; `AMONHEN_CDSE_CLIENT_ID` is still in the config for
+that.
+
+**Only `rasterio` is needed.** The `[eo]` extra used to list `xarray`,
+`rioxarray`, `netcdf4`, `odc-stac` and `pystac-client` as well. None was ever
+imported: the STAC catalogue is plain JSON over HTTP, which the existing httpx
+client handles, and windowed COG reads plus polygonisation are rasterio's own
+job. What is left resolves to four packages and 165 MB. rasterio still needs
+`libexpat1`, which `python:*-slim` does not ship — installed unconditionally in
+`backend/Dockerfile` so `uv pip install rasterio` works in a running container.
+
+> **⚠ The offset trap. Applying the offset the metadata declares is the bug.**
+>
+> Sentinel-2 baseline 04.00 (January 2022) added a −1000 shift to the digital
+> numbers, so for ESA's own products reflectance is `DN * 0.0001 - 0.1`. Every
+> asset here duly carries `raster:bands: [{scale: 0.0001, offset: -0.1}]`, and
+> the STAC convention reads that as an instruction to apply it.
+>
+> Earth Search has **already applied it** when building the COGs, and says so in
+> a different field: `earthsearch:boa_offset_applied: true`. The `raster:bands`
+> offset describes the convention the product came from, not a correction still
+> outstanding.
+>
+> Applying it twice drives dark pixels negative — physically impossible, and
+> arithmetically silent. Over Parnitha, red reflectance came out at −0.034 for
+> 67% of pixels and NDVI, which is mathematically confined to [−1, 1], returned
+> **1.457**.
+>
+> Two images of the same ground either side of the baseline change settle it
+> without reference to any documentation:
+>
+> | | red | NIR |
+> |---|---|---|
+> | 2021, baseline 03.01, offset genuinely zero | 0.0775 | 0.2683 |
+> | 2026, baseline 05.12, scale only | 0.0662 | 0.2909 |
+> | 2026, baseline 05.12, offset applied | **−0.0338** | 0.1909 |
+>
+> The first two agree; the third is impossible. So `boa_offset_applied` wins,
+> and `_normalised_difference` floors reflectance at zero as a standing guard.
+
+Two more things this gets wrong if you are not careful:
+
+* **Cloud shadow reads as a burn scar.** A shadow darkens near-infrared exactly
+  the way char does. Every pixel is screened through the Scene Classification
+  Layer (SCL) before it counts; without that, an afternoon of cumulus maps as a
+  severe burn.
+* **The post-fire search window must be bounded.** Left open to "now", scene
+  selection prefers the clearest image and so picks up last week's for a fire
+  from two summers ago. The scar is still faintly visible, so the measurement
+  *succeeds* and reports two years of regrowth as a light burn. On Varnavas that
+  dragged mean dNBR from 0.43 to 0.30 and moved the dominant severity class.
+
+**Validation.** Against the Varnavas/Penteli fire of 11–13 August 2024, reported
+at roughly 10,000 ha, this measures **9,910 ha**, mean dNBR 0.507, dominant class
+moderate-high.
+
 ### Esri World Hillshade — terrain, drawn
 Keyless raster tiles. Now that slope drives the projections, being able to *see*
 the hills explains why a fire is heading where it is.
@@ -204,21 +280,8 @@ looked at. Fixing that needs the underlying raster, not the WMS.
 ### ~~Copernicus EFFIS / GWIS~~ — now wired in
 See "Wired in" above.
 
-### Copernicus Sentinel-2 — burn severity
-Register free at https://dataspace.copernicus.eu
-
-10–20 m multispectral, 5-day revisit. The basis for dNBR burn severity:
-
-```
-NBR   = (NIR - SWIR2) / (NIR + SWIR2)      = (B8 - B12) / (B8 + B12)
-dNBR  = NBR_prefire - NBR_postfire
-```
-
-Classified by the Key & Benson thresholds already in `domain/enums.py`
-(`BurnSeverity`). This is the whole recovery/restoration phase, and the `[eo]`
-dependency extra in `backend/pyproject.toml` exists for it — kept out of the
-default image because it adds ~500 MB for capability the response slice does not
-use.
+### ~~Copernicus Sentinel-2~~ — now wired in
+See "Wired in" above.
 
 ### Sentinel-3 SLSTR — active fire
 300–500 m, includes a dedicated fire radiometer. Complements VIIRS with

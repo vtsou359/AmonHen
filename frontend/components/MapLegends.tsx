@@ -69,6 +69,31 @@ export function MapLegends() {
                     <span className="text-2xs text-ink-muted">Heat spot (brighter = hotter)</span>
                   </div>
                 )}
+                {/* The outline layer draws a measurement and a guess in the
+                    same place. Without this the difference is visible but
+                    unexplained, which is worse than not drawing it. */}
+                {layers.perimeters && (
+                  <div className="mt-1 flex flex-col gap-1 border-t border-edge-faint pt-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2.5 w-3.5 shrink-0 rounded-[2px] border-2 border-ink-muted bg-ink-muted/35" />
+                      <span
+                        className="text-2xs text-ink-muted"
+                        title="Measured from Sentinel-2 imagery at 20 m, comparing the ground before and after."
+                      >
+                        Burn scar, measured
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="h-2.5 w-3.5 shrink-0 rounded-[2px] border border-ink-faint bg-ink-faint/10" />
+                      <span
+                        className="text-2xs text-ink-muted"
+                        title="A convex sketch drawn around 375 m satellite heat spots. Approximate."
+                      >
+                        Rough outline, estimated
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

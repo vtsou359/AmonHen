@@ -35,15 +35,28 @@ from amonhen.domain.entities import (
 )
 from amonhen.services import boundary
 from amonhen.services.validation import Plausibility, assess
-from amonhen.services.clustering import build_incident, build_perimeter, cluster_detections
+from amonhen.services.burn_scar import (
+    BurnScar,
+    BurnScarService,
+    BurnScarUnavailable,
+    to_perimeter,
+)
+from amonhen.services.clustering import (
+    build_incident,
+    build_perimeter,
+    cluster_detections,
+    score_severity,
+)
 from amonhen.services.exposure import assess_exposure, summarise
 from amonhen.services.fire_weather import FwiResult, run_series
+from amonhen.services.fuel_moisture import FuelMoisture, FuelMoistureService
 from amonhen.services.projection import EnsembleProjection, project
-from amonhen.services.spread import SpreadEstimate
+from amonhen.services.spread import DEFAULT_FUEL, SpreadEstimate
 from amonhen.sources.elevation import ElevationSource, Terrain
 from amonhen.sources.firms import FirmsSource
 from amonhen.sources.landcover import LandCover, LandCoverSource
 from amonhen.sources.open_meteo import OpenMeteoSource
+from amonhen.sources.sentinel2 import Sentinel2Source
 
 log = get_logger(__name__)
 
@@ -71,6 +84,12 @@ class IncidentView:
     #: Local ground shape from the Copernicus DEM. None when unavailable, which
     #: the projection reports rather than silently assuming flat.
     terrain: Terrain | None
+    #: Burned area measured from Sentinel-2, or the reason there is none. Never
+    #: None once the raster extra is installed — "we could not see it, here is
+    #: why" is information the operator needs, and silence is not.
+    burn_scar: BurnScar | BurnScarUnavailable | None
+    #: How wet the living vegetation around the fire is.
+    fuel_moisture: FuelMoisture | None
     #: The ensemble — where the fire could go under nine sets of assumptions.
     projection: EnsembleProjection | None
     brief: str
@@ -106,6 +125,11 @@ class OperationsService:
         self.weather = OpenMeteoSource()
         self.elevation = ElevationSource()
         self.land_cover = LandCoverSource()
+        # One imagery connector shared by both derived products, so a scene
+        # search made for the burn scar is already cached for fuel moisture.
+        self.imagery = Sentinel2Source()
+        self.burn_scar = BurnScarService(self.imagery)
+        self.fuel_moisture = FuelMoistureService(self.imagery)
         self._picture: OperationalPicture | None = None
         self._lock = asyncio.Lock()
 
@@ -147,7 +171,7 @@ class OperationsService:
         fire_clusters = {label: group for label, group in clusters.items() if label >= 0}
 
         views = await asyncio.gather(
-            *(self._build_view(group) for group in fire_clusters.values())
+            *(self._build_view(group, force=force) for group in fire_clusters.values())
         )
         views = [v for v in views if v is not None]
         views.sort(key=lambda v: (-_severity_rank(v.incident), -v.incident.estimated_area_ha))
@@ -161,6 +185,7 @@ class OperationsService:
                 self.weather.status(),
                 self.elevation.status(),
                 self.land_cover.status(),
+                self.imagery.status(),
             ],
             dropped_outside_boundary=dropped_outside,
         )
@@ -175,7 +200,9 @@ class OperationsService:
 
     # --------------------------------------------------------------- internal
 
-    async def _build_view(self, detections: list[Detection]) -> IncidentView | None:
+    async def _build_view(
+        self, detections: list[Detection], force: bool = False
+    ) -> IncidentView | None:
         try:
             incident = build_incident(detections)
         except ValueError:
@@ -198,8 +225,29 @@ class OperationsService:
             weather.danger_class = danger.danger_class
             incident.fire_weather = weather
 
+        plausibility = assess(detections, land_cover=cover)
+
+        # Imagery, once we know what is on the ground. Both reads are gated,
+        # cached for hours and bounded by a shared semaphore — see the note on
+        # `_should_image` for why not every incident is worth a satellite read.
+        burn_scar, fuel_moisture = await asyncio.gather(
+            self._measure_burn_scar(incident, detections, plausibility, force=force),
+            self._measure_fuel_moisture(incident, detections, cover, plausibility, force=force),
+        )
+
         exposed, spread = assess_exposure(incident, weather)
         perimeter = build_perimeter(incident.id, detections)
+
+        # A measured scar supersedes everything derived from thermal pixels.
+        # This is the whole point of the module: the hull was a sketch and the
+        # pixel count an explicit lower bound, and both now have a real
+        # replacement whenever the sky was clear enough to take one.
+        if isinstance(burn_scar, BurnScar):
+            measured = to_perimeter(burn_scar)
+            if measured is not None:
+                perimeter = measured
+            _apply_measured_area(incident, burn_scar)
+
         if perimeter is not None:
             incident.current_perimeter_id = perimeter.id
 
@@ -211,12 +259,85 @@ class OperationsService:
             danger=danger,
             exposed=exposed,
             spread=spread,
-            plausibility=assess(detections, land_cover=cover),
+            plausibility=plausibility,
             terrain=terrain,
             land_cover=cover,
-            projection=project(incident, weather, exposed, terrain=terrain, land_cover=cover),
-            brief=summarise(incident, exposed, spread, terrain=terrain),
+            burn_scar=burn_scar,
+            fuel_moisture=fuel_moisture,
+            projection=project(
+                incident,
+                weather,
+                exposed,
+                terrain=terrain,
+                land_cover=cover,
+                fuel_moisture=fuel_moisture,
+            ),
+            brief=summarise(
+                incident, exposed, spread, terrain=terrain, burn_scar=burn_scar
+            ),
         )
+
+    # ------------------------------------------------------------- imagery
+
+    def _skip_imaging(
+        self, incident: Incident, detections: list[Detection], plausibility: Plausibility
+    ) -> BurnScarUnavailable | None:
+        """Why this incident is not worth spending a satellite read on, if it is not.
+
+        Each exclusion gets its own words. Reporting "too soon" for a quarry
+        would be a lie of convenience: an operator reading it would wait for a
+        pass that is never going to change the answer, when what the platform
+        actually decided was that there is nothing here to burn.
+        """
+        if len(detections) < 3:
+            return BurnScarUnavailable(
+                reason="Too few heat detections to locate a scar",
+                detail="A burn scar is matched to the heat that found it, and three "
+                "points are the fewest that give an area to match against.",
+            )
+        if plausibility.verdict == "likely_not_wildfire":
+            return BurnScarUnavailable(
+                reason="Not imaged — this does not behave like a fire",
+                detail="Heat here looks industrial, and the ground it sits on cannot "
+                "carry a fire. A satellite image would confirm an absence we already "
+                "expect, so it is not requested.",
+                transient=False,
+            )
+        age_hours = (
+            datetime.now(UTC) - _as_utc(incident.first_detected_at)
+        ).total_seconds() / 3600.0
+        if age_hours < 12.0:
+            return BurnScarUnavailable(
+                reason="Too soon for a satellite image of the burn",
+                detail="Sentinel-2 passes every 2-3 days. Burnt area is estimated from "
+                "heat detections until one does.",
+            )
+        return None
+
+    async def _measure_burn_scar(
+        self,
+        incident: Incident,
+        detections: list[Detection],
+        plausibility: Plausibility,
+        force: bool = False,
+    ) -> BurnScar | BurnScarUnavailable | None:
+        if not self.burn_scar.available:
+            return None
+        skip = self._skip_imaging(incident, detections, plausibility)
+        return skip or await self.burn_scar.assess(incident, detections, force=force)
+
+    async def _measure_fuel_moisture(
+        self,
+        incident: Incident,
+        detections: list[Detection],
+        cover: LandCover | None,
+        plausibility: Plausibility,
+        force: bool = False,
+    ) -> FuelMoisture | None:
+        if not self.fuel_moisture.available or plausibility.verdict == "likely_not_wildfire":
+            return None
+        fuel = (cover.fuel if cover and cover.fuel else None) or DEFAULT_FUEL
+        return await self.fuel_moisture.observe(incident, detections, fuel, force=force)
 
     async def _local_fire_weather(
         self, latitude: float, longitude: float
@@ -281,6 +402,34 @@ def compute_danger(
 
     series = run_series(daily, latitude=latitude)
     return series[-1]
+
+
+def _apply_measured_area(incident: Incident, scar: BurnScar) -> None:
+    """Replace the thermal-pixel area estimate with the measured one.
+
+    Everything derived from area has to move with it. Leaving growth rate and
+    severity on the old figure would put two different areas on the same screen
+    and score the fire against the one that is no longer shown.
+
+    The growth rate is divided by the time to the *image*, not to the last
+    detection: the measured area is what had burnt when the picture was taken,
+    and dividing it by a longer window would report a fire slowing down purely
+    because a satellite passed early.
+    """
+    incident.estimated_area_ha = scar.burned_area_ha
+    incident.area_source = "sentinel2_dnbr"
+
+    elapsed_hours = (
+        scar.post_image_date - _as_utc(incident.first_detected_at)
+    ).total_seconds() / 3600.0
+    if elapsed_hours >= 1.0:
+        incident.growth_rate_ha_per_hour = round(scar.burned_area_ha / elapsed_hours, 2)
+
+    incident.severity = score_severity(incident)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _closest_to_now(observations: list[WeatherObservation]) -> WeatherObservation:

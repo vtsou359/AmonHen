@@ -31,6 +31,8 @@ using it. Add a free NASA key and the same screens become live.
 | **Ingests** | NASA FIRMS active fire detections (VIIRS 375 m, MODIS 1 km) and Open-Meteo fire weather |
 | **Measures fuel** | Vegetation per fire from CORINE Land Cover, so a pine stand and a ploughed field no longer spread identically |
 | **Measures terrain** | Slope and aspect from the Copernicus DEM, so projections run over the real hillside instead of imaginary flat ground |
+| **Measures the burn** | Burned area and severity from Sentinel-2 dNBR at 20 m, replacing a 375 m pixel count that was explicitly a lower bound — validated at 9,910 ha against the 2024 Varnavas fire's reported ~10,000 ha |
+| **Measures dryness** | Live fuel moisture from Sentinel-2 NDMI, sampled in a ring *around* the fire so it reads the fuel ahead of the front rather than the scar behind it |
 | **Screens** | Flags heat detections that behave like factories or flares rather than fires — weak, night-only, never moving |
 | **Clips** | Detections are cut to an actual Greece polygon, not the bounding box FIRMS forces you to ask with — in live data that box was 92% foreign fires |
 | **Clusters** | ST-DBSCAN turns scattered pixels into named incidents that survive the ~24 h gaps between satellite passes |
@@ -109,6 +111,21 @@ The amber banner across the top disappears when every feed is live. Weather is
 already live out of the box — Open-Meteo needs no key, which is exactly why it
 is the default.
 
+### Turning on satellite imagery
+
+Burned-area mapping and live fuel moisture read Sentinel-2 imagery, which needs
+`rasterio` — the one genuinely heavy dependency here, because it carries GDAL.
+It is off by default and needs **no key**:
+
+```bash
+make build-eo
+```
+
+That rebuilds the API image with the `[eo]` extra (165 MB, a couple of minutes)
+and restarts it. Everything else works without it; fires simply report "estimated"
+area and say why there is no measurement. `make status` shows a note against the
+`sentinel2` source when it is not installed.
+
 ## Layout
 
 ```
@@ -133,6 +150,7 @@ make up          # start everything
 make status      # service health + which feeds are live vs fixtures
 make test        # backend test suite
 make logs        # tail everything
+make build-eo    # rebuild with Sentinel-2 support (burned area + fuel moisture)
 make fixtures    # regenerate the demo dataset
 make boundary    # rebuild the Greece polygon from Natural Earth
 make down        # stop
@@ -210,7 +228,17 @@ Stated plainly, because knowing where a tool stops is part of using it:
   Calibrating them against Greek fire records is the highest-value next step.
 - **No fuel continuity.** The model will happily carry a fire across a strait,
   a motorway or a ploughed field. Treat cross-water ETAs as nonsense.
-- **Burned area is a lower bound.** Fire between satellite passes is invisible.
+- **Burned area is a lower bound *until a satellite sees the scar*.** Fire
+  between overpasses is invisible to a thermal pixel count. Once Sentinel-2
+  gets a clear look the figure becomes a 20 m measurement and the dossier says
+  "measured" instead of "estimated" — but that takes 2-3 days, longer under
+  cloud, and needs the optional `[eo]` extra installed. A fire that started this
+  morning has no scar to measure.
+- **Live fuel moisture is uncalibrated.** The NDMI ends of the mapping in
+  `services/fuel_moisture.py` were measured over eight Greek sites across a
+  season, but the live-fuel-moisture values they map onto are literature figures
+  for Mediterranean vegetation, not Greek field measurements. The resulting
+  spread correction is clamped to ±35% precisely because it is first-order.
 - **The gazetteer is a seed**, not a national dataset — about fifty places.
   Import the real thing from OpenStreetMap before relying on exposure counts.
 - **The boundary is simplified** to ~220 m and carries a 3 km coastal buffer, so
@@ -225,10 +253,14 @@ Stated plainly, because knowing where a tool stops is part of using it:
 
 ## Where it goes next — accuracy, in priority order
 
-The honest framing: **more spectral bands help size a lot and direction barely
-at all.** Size is an observation problem, and better observation fixes it.
-Direction is a physics problem driven by wind, terrain and fuel — none of which
-is a band.
+The framing that has held up: **more spectral bands help size a lot and
+direction barely at all.** Size is an observation problem, and better observation
+fixed it — dNBR now measures burned area to within about 1% on a fire with a
+known answer. Direction is a physics problem driven by wind, terrain and fuel,
+none of which is a band, and it remains the least certain thing here.
+
+The one band-derived input that does touch spread is live fuel moisture, and it
+earns a bounded correction rather than a starring role.
 
 **~~1. Terrain.~~ Done.** Copernicus DEM slope and aspect now feed every
 scenario, in each scenario's own direction of travel.
@@ -244,16 +276,27 @@ Canadian boreal forest; only the *choice* of model is now measured, not the
 model itself. This is the highest-value modelling work remaining, and it needs
 historical Greek fire perimeters to fit against.
 
-**2. Burned area from Sentinel-2 dNBR.** *This* is where bands pay off, and the
-payoff is large: 10–20 m burn-scar delineation replacing a 375 m pixel count
-that is explicitly a lower bound. It also replaces the detection-hull perimeters
-the UI currently has to hedge about. The `[eo]` dependency extra exists for it.
+**~~2. Burned area from Sentinel-2 dNBR.~~ Done.** Burn scars are delineated at
+20 m from pre/post NBR differencing and classified by the Key & Benson severity
+thresholds. Measured area supersedes the thermal-pixel count, and the measured
+scar supersedes the detection hull the UI used to hedge about — the map now
+draws the two differently and the dossier labels every area figure "measured" or
+"estimated". Validated at 9,910 ha against the 2024 Varnavas fire's reported
+~10,000 ha.
 
-**3. Live fuel moisture** from Sentinel-2 NDMI/NDWI — the one genuinely useful
-*band-derived* input to spread, feeding the moisture codes with observation
-instead of inference.
+**~~3. Live fuel moisture.~~ Done.** Sentinel-2 NDMI, sampled in a ring around
+the fire rather than over it, so it measures the fuel the fire is running *into*
+instead of the scar it has already left. It feeds the spread model as a bounded
+multiplier rather than into the FWI moisture codes, because those describe *dead*
+fuel moisture and live moisture is a different physical quantity the model omits
+entirely — adding it is filling a gap, not overwriting an inference.
 
-**4. Persistence.** PostGIS is in `docker compose --profile persistence` but not
+**2. Calibrate live fuel moisture against Greek field measurements.** The NDMI
+ends of the mapping are measured; the moisture values they map onto are
+literature ranges. This is the same shape of problem as the fuel coefficients
+above, and the same fix: field data.
+
+**3. Persistence.** PostGIS is in `docker compose --profile persistence` but not
 wired in. History unlocks growth curves, replay and after-action review — and
 lets the spread model be scored against what actually happened, which is the
 only way any of the above gets validated rather than merely improved.

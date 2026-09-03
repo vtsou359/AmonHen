@@ -32,8 +32,8 @@ const DATA_LAYERS: Array<{ key: LayerKey; label: string; hint: string }> = [
   { key: "incidents", label: "Fires", hint: "Each fire, with an arrow showing which way it is heading" },
   {
     key: "perimeters",
-    label: "Rough fire outline",
-    hint: "A sketch of the burnt area drawn around satellite heat spots. Approximate, not surveyed.",
+    label: "Burnt area outline",
+    hint: "Solid where the burn scar has been measured from Sentinel-2 imagery at 20 m; faint and thin where it is still only a sketch drawn around satellite heat spots.",
   },
   {
     key: "detections",

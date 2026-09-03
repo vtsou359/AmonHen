@@ -217,16 +217,31 @@ export function MapCanvas() {
           data: perimeters.data,
           filled: true,
           stroked: true,
-          // Detection hulls are a sketch, not a survey. Dashed-thin strokes and
-          // a barely-there fill say "approximate" without a legend having to.
+          // Two kinds of shape share this layer and must not look alike.
+          //
+          // A detection hull is a convex sketch around 375 m heat pixels: faint
+          // fill, thin line, "approximate" said by the styling so a legend does
+          // not have to. A Sentinel-2 dNBR scar is a 20 m measurement of ground
+          // that actually burned: solid fill and a firm edge. Drawing them the
+          // same would be the map asserting a precision it does not have.
           getFillColor: (f: any) =>
-            severityRgb((f.properties.severity as Severity) ?? "informational", 38),
+            severityRgb(
+              (f.properties.severity as Severity) ?? "informational",
+              f.properties.is_measured ? 90 : 38,
+            ),
           getLineColor: (f: any) =>
-            severityRgb((f.properties.severity as Severity) ?? "informational", 210),
-          getLineWidth: (f: any) => (f.properties.incident_id === selectedIncidentId ? 3 : 1.5),
+            severityRgb((f.properties.severity as Severity) ?? "informational", 235),
+          getLineWidth: (f: any) => {
+            const selected = f.properties.incident_id === selectedIncidentId;
+            const base = f.properties.is_measured ? 2.5 : 1.5;
+            return selected ? base + 1.5 : base;
+          },
           lineWidthUnits: "pixels",
           pickable: true,
-          updateTriggers: { getLineWidth: [selectedIncidentId] },
+          updateTriggers: {
+            getFillColor: [selectedIncidentId],
+            getLineWidth: [selectedIncidentId],
+          },
           onClick: ({ object }: any) => object && select(object.properties.incident_id),
         }),
       );

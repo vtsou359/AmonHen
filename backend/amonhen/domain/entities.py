@@ -137,7 +137,7 @@ class Perimeter(BaseEntity):
     observed_at: datetime
     geometry: dict[str, Any]           # GeoJSON Polygon / MultiPolygon
     area_ha: float
-    method: str                        # "detection_hull" | "sentinel2_nbr" | "manual"
+    method: str                        # "detection_hull" | "sentinel2_dnbr" | "manual"
     confidence: float | None = None    # 0-1, how much to trust this footprint
 
 
@@ -166,6 +166,11 @@ class Incident(BaseEntity):
     max_frp_mw: float = 0.0
     estimated_area_ha: float = 0.0
     growth_rate_ha_per_hour: float = 0.0
+    #: How `estimated_area_ha` was arrived at. "thermal_pixels" counts distinct
+    #: 375 m satellite footprints and is an explicit lower bound;
+    #: "sentinel2_dnbr" is a 20 m burn-scar measurement. The two differ by
+    #: enough that the UI must never present them as the same kind of number.
+    area_source: str = "thermal_pixels"
 
     # Administrative context, filled in by reverse geocoding.
     region: str | None = None

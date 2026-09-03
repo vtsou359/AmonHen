@@ -36,17 +36,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Raster/Earth-observation stack. Not needed for the active-response slice
-# (detections are point data), so it is kept out of the default image to save
-# ~500 MB and several minutes of build time. Enable it when we build the
-# post-fire severity + recovery modules:  uv pip install -e ".[eo]"
+# Raster/Earth-observation stack, for Sentinel-2 burned-area mapping and live
+# fuel moisture. Kept out of the default image because rasterio carries GDAL,
+# by far the heaviest thing this project could depend on, and the entire
+# active-response path (detections, clustering, weather, spread, projection)
+# works without it. Install it to turn the imagery features on:
+#
+#     uv pip install -e ".[eo]"
+#
+# The wheel also needs libexpat at runtime, which python:*-slim does not ship —
+# see backend/Dockerfile.
+#
+# Deliberately just rasterio. An earlier version of this extra also listed
+# xarray, rioxarray, netcdf4, odc-stac and pystac-client; none of them is
+# imported anywhere. The STAC catalogue is plain JSON over HTTP, which the
+# httpx client every other source already uses handles fine, and windowed COG
+# reads plus polygonisation are both rasterio's own job. Dropping the other
+# five leaves an extra that resolves to just four packages (rasterio plus affine,
+# attrs and pyparsing) and costs 165 MB, for no lost function.
 eo = [
     "rasterio>=1.4",
-    "rioxarray>=0.17",
-    "xarray>=2024.10",
-    "netcdf4>=1.7",
-    "pystac-client>=0.8",
-    "odc-stac>=0.3",
 ]
 dev = [
     "pytest>=8.3",

@@ -5,6 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from amonhen.api.schemas import (
+    BurnScarSummary,
+    BurnScarUnavailableSummary,
+    FuelMoistureSummary,
     FwiSummary,
     IncidentDetail,
     IncidentSummary,
@@ -17,6 +20,7 @@ from amonhen.api.schemas import (
     SpreadSummary,
     ThreatSummary,
 )
+from amonhen.services.burn_scar import BurnScar, BurnScarUnavailable
 from amonhen.services.operations import IncidentView, operations
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
@@ -72,6 +76,8 @@ async def get_incident(incident_id: str) -> IncidentDetail:
         spread=SpreadSummary(**vars(view.spread)) if view.spread else None,
         exposed=view.exposed,
         projection=_to_projection(view),
+        burn_scar=_to_burn_scar(view),
+        burn_scar_unavailable=_to_burn_scar_unavailable(view),
         plausibility=PlausibilitySummary(
             verdict=view.plausibility.verdict,
             score=view.plausibility.score,
@@ -80,6 +86,40 @@ async def get_incident(incident_id: str) -> IncidentDetail:
         ),
         brief=view.brief,
         detection_count=len(view.detections),
+    )
+
+
+def _to_burn_scar(view: IncidentView) -> BurnScarSummary | None:
+    scar = view.burn_scar
+    if not isinstance(scar, BurnScar):
+        return None
+    return BurnScarSummary(
+        burned_area_ha=scar.burned_area_ha,
+        mean_dnbr=scar.mean_dnbr,
+        mean_rdnbr=scar.mean_rdnbr,
+        severity_ha=scar.severity_ha,
+        dominant_severity=scar.dominant_severity,
+        pre_image_date=scar.pre_image_date,
+        post_image_date=scar.post_image_date,
+        usable_fraction=scar.usable_fraction,
+        confidence=scar.confidence,
+        is_partial=scar.is_partial,
+        note=scar.note,
+    )
+
+
+def _to_burn_scar_unavailable(view: IncidentView) -> BurnScarUnavailableSummary | None:
+    """Why there is no measured burn scar.
+
+    Reported rather than left as a null: an operator looking at a thermal-pixel
+    estimate needs to know whether the better number is coming in a day or is
+    never coming at all.
+    """
+    reason = view.burn_scar
+    if not isinstance(reason, BurnScarUnavailable):
+        return None
+    return BurnScarUnavailableSummary(
+        reason=reason.reason, detail=reason.detail, transient=reason.transient
     )
 
 
@@ -104,6 +144,7 @@ def _to_projection(view: IncidentView) -> ProjectionSummary | None:
                 label=p.scenario.label,
                 rationale=p.scenario.rationale,
                 fuel=p.fuel_used,
+                live_moisture_pct=p.live_moisture_pct,
                 head_ros_m_per_min=p.spread.head_ros_m_per_min,
                 direction_deg=p.spread.direction_deg,
                 direction_label=p.spread.direction_label,
@@ -138,6 +179,21 @@ def _to_projection(view: IncidentView) -> ProjectionSummary | None:
                 source=projection.land_cover.source,
             )
             if projection.land_cover is not None and projection.land_cover.code
+            else None
+        ),
+        fuel_moisture=(
+            FuelMoistureSummary(
+                ndmi=projection.fuel_moisture.ndmi,
+                ndvi=projection.fuel_moisture.ndvi,
+                live_moisture_pct=projection.fuel_moisture.live_moisture_pct,
+                descriptor=projection.fuel_moisture.descriptor,
+                greenness=projection.fuel_moisture.greenness,
+                spread_factor=projection.fuel_moisture.spread_factor,
+                observed_at=projection.fuel_moisture.observed_at,
+                sample_pixels=projection.fuel_moisture.sample_pixels,
+                source=projection.fuel_moisture.source,
+            )
+            if projection.fuel_moisture is not None
             else None
         ),
         terrain=(
@@ -213,6 +269,7 @@ def _to_summary(view: IncidentView) -> IncidentSummary:
         detection_count=incident.detection_count,
         first_detected_at=incident.first_detected_at,
         last_detected_at=incident.last_detected_at,
+        area_source=incident.area_source,
         danger_class=view.danger.danger_class if view.danger else None,
         top_threat=top.name if top else None,
         minutes_to_top_threat=top.minutes_to_impact if top else None,

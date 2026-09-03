@@ -58,10 +58,32 @@ class Settings(BaseSettings):
     # Copernicus EFFIS / Global Wildfire Information System.
     effis_wfs_url: str = "https://maps.effis.emergency.copernicus.eu/gwis"
 
-    # Copernicus Data Space Ecosystem (Sentinel-2/3). Only needed for the
-    # post-fire modules; register at https://dataspace.copernicus.eu
+    # Copernicus Data Space Ecosystem (Sentinel-2/3). Not currently used: the
+    # Sentinel-2 imagery below comes from the AWS mirror, which needs no
+    # credential. Kept for the day we need bulk download or a product AWS does
+    # not carry. Register at https://dataspace.copernicus.eu
     cdse_client_id: str = ""
     cdse_client_secret: str = ""
+
+    # Sentinel-2 L2A, via the Earth Search STAC catalogue over the public
+    # `sentinel-cogs` AWS bucket. Keyless, and the same ESA pixels as CDSE.
+    # Only reachable when the [eo] extra is installed — see sources/sentinel2.py.
+    sentinel2_stac_url: str = "https://earth-search.aws.element84.com/v1"
+    sentinel2_collection: str = "sentinel-2-l2a"
+    # Scene-level cloud cover to accept. Generous on purpose: cloud is scored
+    # per-pixel from the scene classification anyway, and over Greece in summer
+    # a scene at 30% cloud is usually completely clear over the fire itself.
+    sentinel2_max_cloud_pct: float = 40.0
+
+    # Burned-area mapping from Sentinel-2 dNBR, and live fuel moisture from
+    # NDMI. Both no-op without the [eo] extra; these switches exist so an
+    # operator who has installed it can still turn the imagery reads off.
+    burn_scar_enabled: bool = True
+    fuel_moisture_enabled: bool = True
+    # Imagery reads are the slowest thing in a rebuild. This bounds how many run
+    # at once, so twenty simultaneous fires cannot open sixty HTTP connections
+    # to the same bucket and get themselves throttled.
+    eo_max_concurrent_reads: int = 4
 
     # ------------------------------------------------------------- ingest
     ingest_enabled: bool = True

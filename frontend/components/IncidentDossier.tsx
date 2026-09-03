@@ -4,10 +4,15 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { ApiError, useIncident } from "@/lib/api";
 import { formatArea, formatLeadTime, formatRelative, titleCase } from "@/lib/format";
-import { DANGER_HEX } from "@/lib/palette";
+import { BURN_SEVERITY_HEX, BURN_SEVERITY_ORDER, DANGER_HEX } from "@/lib/palette";
 import {
+  AREA_SOURCE_HINT,
+  AREA_SOURCE_LABEL,
+  BURN_SEVERITY_HINT,
+  BURN_SEVERITY_LABEL,
   DANGER_LABEL,
   FUEL_LABEL,
+  FUEL_MOISTURE_HINT,
   FWI_CODE,
   STATUS_LABEL,
   VERDICT_HINT,
@@ -15,7 +20,13 @@ import {
   exposureLabel,
 } from "@/lib/labels";
 import { useUi } from "@/lib/store";
-import type { ProjectionSummary, Severity } from "@/lib/types";
+import type {
+  BurnScarSummary,
+  BurnScarUnavailableSummary,
+  BurnSeverity,
+  ProjectionSummary,
+  Severity,
+} from "@/lib/types";
 import { DangerChip, SeverityChip } from "./Badges";
 
 /**
@@ -72,8 +83,19 @@ export function IncidentDossier() {
     );
   }
 
-  const { incident, weather, danger, spread, exposed, brief, perimeter, projection, plausibility } =
-    data;
+  const {
+    incident,
+    weather,
+    danger,
+    spread,
+    exposed,
+    brief,
+    perimeter,
+    projection,
+    plausibility,
+    burn_scar: burnScar,
+    burn_scar_unavailable: burnScarUnavailable,
+  } = data;
   const threatened = exposed.filter((e) => e.minutes_to_impact != null || e.is_downwind);
 
   return (
@@ -157,7 +179,16 @@ export function IncidentDossier() {
         {/* ------------------------------------------------------ key figures */}
         <Section title="This fire">
           <div className="grid grid-cols-2 gap-3">
-            <Figure label="Burnt area" value={formatArea(incident.estimated_area_ha)} />
+            {/* The one figure on this panel that is two different kinds of
+                number depending on whether a satellite has seen the ground.
+                Labelling which is not a detail: an estimate from 375 m heat
+                pixels is a floor, and a 20 m burn scar is the answer. */}
+            <Figure
+              label="Burnt area"
+              value={formatArea(incident.estimated_area_ha)}
+              note={AREA_SOURCE_LABEL[incident.area_source]}
+              hint={AREA_SOURCE_HINT[incident.area_source]}
+            />
             <Figure
               label="Growing by"
               value={`${Math.round(incident.growth_rate_ha_per_hour)} ha/h`}
@@ -166,13 +197,17 @@ export function IncidentDossier() {
             <Figure label="Peak intensity" value={`${Math.round(incident.max_frp_mw)} MW`} hint="Heat output of the hottest satellite pixel. Higher means a more intense fire." />
             <Figure label="Heat spots" value={String(data.detection_count)} hint="How many satellite hot pixels make up this fire." />
           </div>
-          {perimeter && (
+          {/* The outline means something different in each case too, so the
+              apology only appears when it is still a sketch. */}
+          {perimeter && perimeter.method !== "sentinel2_dnbr" && (
             <p className="mt-3 border-t border-edge-faint pt-2 text-2xs leading-relaxed text-ink-faint">
               The outline is a rough sketch drawn around satellite heat spots, not a
               surveyed boundary. Treat the shape as approximate.
             </p>
           )}
         </Section>
+
+        <BurnScarSection scar={burnScar} unavailable={burnScarUnavailable} />
 
         {/* ---------------------------------------------------------- threats */}
         {/* When an ensemble exists it supersedes the single-estimate exposure
@@ -337,6 +372,123 @@ export function IncidentDossier() {
 }
 
 /**
+ * What the ground looks like now, from Sentinel-2.
+ *
+ * Shown even when there is no measurement, because the *absence* is
+ * informative and its causes are not interchangeable. "No clear image since the
+ * fire started" means wait a day; "does not behave like a fire" means the
+ * number above is all there will ever be. Rendering both as a blank panel would
+ * lose that, and leave an operator wondering whether the feature is broken.
+ */
+function BurnScarSection({
+  scar,
+  unavailable,
+}: {
+  scar: BurnScarSummary | null;
+  unavailable: BurnScarUnavailableSummary | null;
+}) {
+  if (!scar) {
+    if (!unavailable) return null;
+    return (
+      <Section title="Burn scar">
+        <p className="text-xs leading-relaxed text-ink-muted">{unavailable.reason}</p>
+        {unavailable.detail && (
+          <p className="mt-1.5 text-2xs leading-relaxed text-ink-faint">{unavailable.detail}</p>
+        )}
+        {unavailable.transient && (
+          <p className="mt-2 text-2xs leading-relaxed text-ink-faint/70">
+            This should resolve on its own once a satellite passes over in clear weather.
+          </p>
+        )}
+      </Section>
+    );
+  }
+
+  const classes = BURN_SEVERITY_ORDER.filter((s) => (scar.severity_ha[s] ?? 0) > 0);
+  const total = classes.reduce((sum, s) => sum + (scar.severity_ha[s] ?? 0), 0) || 1;
+
+  return (
+    <Section title="Burn scar">
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <div className="tabular text-2xl font-semibold leading-none text-ink">
+            {formatArea(scar.burned_area_ha)}
+          </div>
+          <div className="mt-1 text-2xs text-ink-muted">
+            measured from satellite imagery at 20 m
+          </div>
+        </div>
+        <div
+          className="tabular shrink-0 text-right text-2xs leading-tight text-ink-faint"
+          title={
+            `Before: ${new Date(scar.pre_image_date).toLocaleDateString("en-GB")}. ` +
+            `After: ${new Date(scar.post_image_date).toLocaleDateString("en-GB")}. ` +
+            `${Math.round(scar.usable_fraction * 100)}% of the area was clear of cloud in both.`
+          }
+        >
+          {new Date(scar.post_image_date).toLocaleDateString("en-GB", {
+            day: "numeric",
+            month: "short",
+          })}
+          <br />
+          {Math.round(scar.confidence * 100)}% confidence
+        </div>
+      </div>
+
+      {/* A stacked bar rather than a table: the question people actually have
+          is "how much of it is a total loss", which is a proportion. */}
+      {classes.length > 0 && (
+        <>
+          <div className="mt-3 flex h-2 w-full overflow-hidden rounded-full">
+            {classes.map((severity) => (
+              <div
+                key={severity}
+                style={{
+                  width: `${((scar.severity_ha[severity] ?? 0) / total) * 100}%`,
+                  backgroundColor: BURN_SEVERITY_HEX[severity],
+                }}
+                title={`${BURN_SEVERITY_LABEL[severity]}: ${formatArea(scar.severity_ha[severity] ?? 0)}`}
+              />
+            ))}
+          </div>
+          <ul className="mt-2 space-y-1">
+            {classes.map((severity) => (
+              <li
+                key={severity}
+                className="flex items-baseline justify-between gap-2"
+                title={BURN_SEVERITY_HINT[severity]}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-sm"
+                    style={{ backgroundColor: BURN_SEVERITY_HEX[severity] }}
+                  />
+                  <span className="text-2xs text-ink-muted">
+                    {BURN_SEVERITY_LABEL[severity]}
+                  </span>
+                </span>
+                <span className="tabular text-2xs text-ink-faint">
+                  {formatArea(scar.severity_ha[severity] ?? 0)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {scar.is_partial && (
+        <p className="mt-3 rounded-sm border border-severity-major/25 bg-severity-major/[0.07] p-2 text-2xs leading-relaxed text-ink-muted">
+          {scar.note}
+        </p>
+      )}
+      {!scar.is_partial && scar.note && (
+        <p className="mt-2.5 text-2xs leading-relaxed text-ink-faint">{scar.note}</p>
+      )}
+    </Section>
+  );
+}
+
+/**
  * The ensemble, as a range rather than a number.
  *
  * The headline is deliberately the *spread* of forward rates across scenarios,
@@ -396,6 +548,42 @@ function ProjectionSection({
               </>
             ) : (
               <span className="text-severity-moderate">nothing to burn</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Sits directly under "what's growing", because the two answer halves of
+          one question: what the fuel is, and how wet it is right now. */}
+      {projection.fuel_moisture && (
+        <div
+          className="mt-3 flex items-baseline justify-between gap-2 border-t border-edge-faint pt-2.5"
+          title={FUEL_MOISTURE_HINT}
+        >
+          <div className="min-w-0">
+            <div className="label">How dry the plants are</div>
+            <div className="truncate text-xs capitalize text-ink">
+              {projection.fuel_moisture.descriptor}
+            </div>
+          </div>
+          <div className="tabular shrink-0 text-right text-2xs leading-tight text-ink-faint">
+            {projection.fuel_moisture.live_moisture_pct.toFixed(0)}% water
+            <br />
+            {/* State the effect, not the multiplier. "x1.17" is meaningless
+                without knowing what it multiplies. */}
+            {Math.abs(projection.fuel_moisture.spread_factor - 1) < 0.05 ? (
+              "about normal"
+            ) : (
+              <span
+                className={
+                  projection.fuel_moisture.spread_factor > 1
+                    ? "text-severity-major"
+                    : "text-ink-faint"
+                }
+              >
+                {Math.round(Math.abs(projection.fuel_moisture.spread_factor - 1) * 100)}%{" "}
+                {projection.fuel_moisture.spread_factor > 1 ? "faster" : "slower"}
+              </span>
             )}
           </div>
         </div>
@@ -488,11 +676,14 @@ function Figure({
   value,
   alert,
   hint,
+  note,
 }: {
   label: string;
   value: string;
   alert?: boolean;
   hint?: string;
+  /** A qualifier on the number itself — how it was arrived at, not what it is. */
+  note?: string;
 }) {
   return (
     <div title={hint}>
@@ -505,6 +696,7 @@ function Figure({
       >
         {value}
       </div>
+      {note && <div className="mt-0.5 text-[9px] leading-none text-ink-faint">{note}</div>}
     </div>
   );
 }

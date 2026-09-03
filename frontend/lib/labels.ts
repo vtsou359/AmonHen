@@ -11,7 +11,7 @@
  * rather than the label.
  */
 
-import type { DangerClass, Severity, Verdict } from "./types";
+import type { AreaSource, BurnSeverity, DangerClass, Severity, Verdict } from "./types";
 
 /** How bad this fire is. "Informational" is accurate and means nothing to most people. */
 export const SEVERITY_LABEL: Record<Severity, string> = {
@@ -154,3 +154,60 @@ export const FUEL_LABEL: Record<string, string> = {
   mixed_forest: "mixed forest",
   agricultural: "farmland",
 };
+
+
+/**
+ * How a burnt area was arrived at.
+ *
+ * These are not two estimates of the same thing at different precisions — they
+ * are different measurements. Counting 375 m heat pixels can only ever give a
+ * lower bound, because fire that burned between satellite passes leaves no
+ * pixel to count. A 20 m burn scar is the ground itself. The UI says which,
+ * every time it prints a number of hectares.
+ */
+export const AREA_SOURCE_LABEL: Record<AreaSource, string> = {
+  thermal_pixels: "estimated",
+  sentinel2_dnbr: "measured",
+};
+
+export const AREA_SOURCE_HINT: Record<AreaSource, string> = {
+  thermal_pixels:
+    "Counted from satellite heat spots at 375 m. This is a lower bound — anything that burned between passes is not in it.",
+  sentinel2_dnbr:
+    "Measured from the burn scar in Sentinel-2 imagery at 20 m, by comparing the ground before and after.",
+};
+
+/**
+ * How hard the ground was hit, from the change in the burn ratio.
+ *
+ * Standard Key & Benson classes. The labels say what the words mean on the
+ * ground rather than repeating the class name, because "moderate-low severity"
+ * tells a non-specialist nothing about whether anything survived.
+ */
+export const BURN_SEVERITY_LABEL: Record<BurnSeverity, string> = {
+  unburned: "Untouched",
+  low: "Lightly burnt",
+  moderate_low: "Partly burnt",
+  moderate_high: "Badly burnt",
+  high: "Destroyed",
+};
+
+export const BURN_SEVERITY_HINT: Record<BurnSeverity, string> = {
+  unburned: "No detectable change.",
+  low: "Surface fire. Scorched ground, most trees alive.",
+  moderate_low: "Understory gone, canopy patchy.",
+  moderate_high: "Most vegetation consumed, some structure left standing.",
+  high: "Near-total loss of vegetation. Bare, exposed soil, and the ground most at risk of erosion this winter.",
+};
+
+/**
+ * Live fuel moisture — how much water is in the *living* plants.
+ *
+ * Distinct from the dryness codes above it in the dossier, which come from
+ * weather and describe dead litter. This one is measured from orbit, and it is
+ * the thing weather cannot tell you.
+ */
+export const FUEL_MOISTURE_HINT =
+  "How much water is in the living plants around the fire, measured from Sentinel-2 satellite imagery. " +
+  "The weather-based dryness numbers above describe dead leaves and litter; this describes the living " +
+  "vegetation the fire is heading into, which weather alone cannot tell you.";

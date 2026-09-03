@@ -108,6 +108,8 @@ def estimate_spread(
     wind_speed_kmh: float,
     fuel: str = DEFAULT_FUEL,
     slope_pct: float = 0.0,
+    live_moisture_factor: float = 1.0,
+    live_moisture_pct: float | None = None,
 ) -> SpreadEstimate:
     """Head/flank/back rate of spread for the given conditions.
 
@@ -118,10 +120,17 @@ def estimate_spread(
 
     `slope_pct` is the grade *along the direction of spread*, signed: positive
     uphill, negative downhill. Callers get it from `Terrain.slope_toward()`.
+
+    `live_moisture_factor` scales the head rate for how wet the *living*
+    vegetation is, measured from Sentinel-2. The FBP equations take dead fuel
+    moisture through ISI and model live moisture not at all, so this adds a
+    missing effect rather than double-counting an existing one. Callers get it
+    from `services.fuel_moisture`; 1.0 means nothing was measured.
     """
     model = FUEL_MODELS.get(fuel, FUEL_MODELS[DEFAULT_FUEL])
 
     head_ros = model.a * (1.0 - math.exp(-model.b * max(isi, 0.0))) ** model.c
+    head_ros *= live_moisture_factor
 
     # Slope effect (Van Wagner): fire runs uphill roughly exponentially with grade.
     #
@@ -156,6 +165,16 @@ def estimate_spread(
     ]
     if wind_speed_kmh > 40:
         caveats.append("Above ~40 km/h, spread becomes erratic and this model degrades sharply.")
+    if live_moisture_pct is not None:
+        direction = "faster" if live_moisture_factor > 1.0 else "slower"
+        caveats.append(
+            f"Living vegetation measured at {live_moisture_pct:.0f}% moisture from "
+            f"Sentinel-2, which makes this {abs(1.0 - live_moisture_factor) * 100:.0f}% "
+            f"{direction} than weather alone would suggest."
+            if abs(live_moisture_factor - 1.0) >= 0.02
+            else f"Living vegetation measured at {live_moisture_pct:.0f}% moisture from "
+            f"Sentinel-2 — about normal, so no adjustment was made."
+        )
 
     return SpreadEstimate(
         head_ros_m_per_min=round(head_ros, 1),

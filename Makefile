@@ -5,7 +5,7 @@
 # for iterating on the science code.
 
 .DEFAULT_GOAL := help
-.PHONY: help up down logs restart build rebuild boundary fixtures test lint api-shell \
+.PHONY: help up down logs restart build rebuild build-eo boundary fixtures test lint api-shell \
         local-api local-test clean status
 
 help: ## Show this help
@@ -31,6 +31,14 @@ build: ## Build images
 
 rebuild: ## Rebuild images from scratch
 	docker compose build --no-cache
+
+build-eo: ## Rebuild the API image with Sentinel-2 raster support ([eo] extra)
+	@# Turns on burned-area mapping from dNBR and live fuel moisture from NDMI.
+	@# Adds 165 MB (GDAL, via rasterio) and a couple of minutes to the build.
+	docker compose build --build-arg INSTALL_EO=true api
+	docker compose up -d api
+	@echo "\n  Sentinel-2 imagery enabled. Check with:"
+	@echo "  curl -s localhost:8000/api/v1/system/status | grep -A3 sentinel2\n"
 
 status: ## Show service status and data source modes
 	@docker compose ps

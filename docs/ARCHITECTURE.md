@@ -147,6 +147,9 @@ dropped is reported at `/api/v1/incidents` so the filtering is visible.
 
 ## Area estimation
 
+Two regimes, and the platform is explicit about which one a number came from.
+
+**Before a satellite sees the scar**, area is derived from thermal detections.
 Three approaches, one chosen:
 
 | Approach | Problem |
@@ -156,7 +159,56 @@ Three approaches, one chosen:
 | **Union of footprints on a grid** | **Chosen.** Snap each detection to a cell at sensor resolution, count distinct cells |
 
 The result is an honest lower bound: fire that burns between overpasses is
-invisible to it. The API says so and the UI shows the method and a confidence.
+invisible to it.
+
+**Once Sentinel-2 gets a clear look**, `services/burn_scar.py` replaces that with
+a measurement — dNBR at 20 m, delineated and classified by severity. The
+measured figure supersedes the estimate, and `Incident.area_source` records
+which one is on screen. That flag exists because the two are not the same kind of
+number at different precisions: one is a floor, the other is the ground.
+
+Everything derived from area moves with it. `_apply_measured_area` rescores
+severity and recomputes the growth rate — dividing by the time to the *image*,
+not to the last detection, so a fire does not appear to slow down merely because
+a satellite passed early.
+
+The perimeter follows the same rule. A `detection_hull` is a convex sketch drawn
+faint and thin; a `sentinel2_dnbr` scar is drawn solid. The map must not present
+a 375 m guess and a 20 m measurement with identical styling.
+
+## Live fuel moisture, and where it does not go
+
+The FWI moisture codes (FFMC, DMC, DC) describe **dead** fuel moisture and are
+computed from weather. Living vegetation is absent from the model entirely, and
+in Greece it is most of the fuel.
+
+`services/fuel_moisture.py` measures it from Sentinel-2 NDMI and applies it as a
+bounded multiplier on rate of spread — *not* by writing into the moisture codes.
+That distinction is the whole design: live and dead fuel moisture are different
+physical quantities, so this is filling a gap in the model rather than
+overwriting one of its inferences.
+
+Two constraints worth carrying forward:
+
+**The sample is a ring around the fire, not the fire.** Averaging NDMI over the
+burn measures the scar — charred ground has no leaf water — and then feeds that
+back as a prediction that the fire will spread fast. Sampling the unburnt
+annulus measures the fuel the fire is running *into*, which is the quantity
+actually wanted.
+
+**The multiplier is clamped to ±35%, and the clamp is an argument.** A satellite
+is watching this fire burn. Whatever an uncalibrated index says, the fuel is
+evidently dry enough to carry fire, so the index gets to adjust the rate and
+never to overrule the observation.
+
+## Optional dependencies
+
+`rasterio` is the one heavy dependency in the project, and it is optional. Both
+imagery products check `EO_AVAILABLE` and degrade to "not measured" — the whole
+active-response path (detections, clustering, weather, spread, projection) runs
+untouched without it. Installing it must never silently move numbers on fires it
+cannot see, which is why the moisture multiplier defaults to exactly 1.0 and is
+covered by a test that says so.
 
 ## Ensemble projection
 

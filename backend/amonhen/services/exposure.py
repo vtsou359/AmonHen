@@ -154,6 +154,7 @@ def summarise(
     exposed: list[ExposedElement],
     spread: SpreadEstimate | None,
     terrain: object | None = None,
+    burn_scar: object | None = None,
 ) -> str:
     """A short plain-language brief.
 
@@ -165,11 +166,27 @@ def summarise(
     `terrain` is accepted so the closing caveat can tell the truth. It used to
     say "flat-ground estimate" unconditionally, which became a lie the moment
     slope was measured — and sat directly above a panel reporting the slope.
+
+    `burn_scar` is accepted for the same reason. "Hectares burnt" means two very
+    different things depending on whether it counts satellite heat pixels or
+    measures a burn scar, and the reader deserves to know which one they are
+    being told.
     """
     status = _STATUS_WORDS.get(_value(incident.status), _value(incident.status))
     severity = _SEVERITY_WORDS.get(_value(incident.severity), _value(incident.severity))
 
-    parts = [f"{incident.estimated_area_ha:,.0f} hectares burnt, {status}, {severity}."]
+    measured_on = getattr(burn_scar, "post_image_date", None)
+    if measured_on is not None:
+        parts = [
+            f"{incident.estimated_area_ha:,.0f} hectares burnt, measured from a "
+            f"satellite image on {measured_on.strftime('%d %b')}. {status.capitalize()}, "
+            f"{severity}."
+        ]
+    else:
+        parts = [
+            f"About {incident.estimated_area_ha:,.0f} hectares burnt — a lower bound, "
+            f"counted from satellite heat spots. {status.capitalize()}, {severity}."
+        ]
 
     if incident.growth_rate_ha_per_hour > 1:
         parts.append(f"Growing by about {incident.growth_rate_ha_per_hour:,.0f} hectares an hour.")

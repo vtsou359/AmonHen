@@ -36,6 +36,41 @@ class SourceUnavailable(RuntimeError):
     """Raised internally when a feed cannot be reached; callers get fixtures."""
 
 
+class JsonCache:
+    """A small keyed disk cache, one JSON file per key.
+
+    Split out of `DataSource` so derived products can use it too. Burned-area
+    mapping and fuel moisture are not feeds — they are things computed *from*
+    a feed — but they are every bit as expensive to recompute, so they want the
+    same cache without inheriting the fixture-fallback machinery around it.
+    """
+
+    def __init__(self, name: str, ttl_seconds: int) -> None:
+        self.directory = settings.cache_dir / name
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.ttl_seconds = ttl_seconds
+
+    def path(self, key: str) -> Path:
+        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+        return self.directory / f"{digest}.json"
+
+    def read(self, key: str, force: bool = False) -> Any | None:
+        if force:
+            return None
+        path = self.path(key)
+        if not path.exists():
+            return None
+        if time.time() - path.stat().st_mtime > self.ttl_seconds:
+            return None
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return None
+
+    def write(self, key: str, value: Any) -> None:
+        self.path(key).write_text(json.dumps(value, default=str))
+
+
 class DataSource(ABC, Generic[T]):
     """Base class for a feed of fire-relevant data.
 
@@ -53,8 +88,8 @@ class DataSource(ABC, Generic[T]):
     requires_credentials: bool = True
 
     def __init__(self) -> None:
-        self.cache_dir = settings.cache_dir / self.name
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache = JsonCache(self.name, self.cache_ttl_seconds)
+        self.cache_dir = self._cache.directory
 
     # ---------------------------------------------------------------- public
 
@@ -120,24 +155,13 @@ class DataSource(ABC, Generic[T]):
             return response
 
     def _cache_path(self, key: str) -> Path:
-        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
-        return self.cache_dir / f"{digest}.json"
+        return self._cache.path(key)
 
     def _cache_read(self, key: str, force: bool = False) -> Any | None:
-        if force:
-            return None
-        path = self._cache_path(key)
-        if not path.exists():
-            return None
-        if time.time() - path.stat().st_mtime > self.cache_ttl_seconds:
-            return None
-        try:
-            return json.loads(path.read_text())
-        except json.JSONDecodeError:
-            return None
+        return self._cache.read(key, force=force)
 
     def _cache_write(self, key: str, value: Any) -> None:
-        self._cache_path(key).write_text(json.dumps(value, default=str))
+        self._cache.write(key, value)
 
     def _fixture_path(self, filename: str) -> Path:
         return settings.fixtures_dir / filename

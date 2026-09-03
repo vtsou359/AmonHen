@@ -3,12 +3,15 @@
 A single spread arrow is a lie of precision. It says "this fire goes south-west
 at 45 m/min" when the honest statement is "under the assumptions we are forced
 to make, it probably goes somewhere in this arc, and here is how wrong we could
-be". The three inputs we are least sure of are exactly the three that decide
-where a fire goes:
+be". The inputs we are least sure of are the ones that decide where a fire goes,
+and what "unsure" means for each has changed as they became measured:
 
-    fuel       we assume one uniform type for a whole country
-    wind       a 9 km forecast grid, and it veers
-    slope      nothing supplies terrain yet, so every estimate is flat-ground
+    wind       a 9 km forecast grid, and it veers. Still the biggest unknown.
+    fuel       measured per fire from land cover, but 100 m data from 2018 — so
+               the *type* is observed and the patch it sits in may not be
+    slope      measured from the Copernicus DEM at ~90 m over broken ground
+    moisture   live fuel moisture measured from Sentinel-2, through a mapping
+               that is first-order and not yet calibrated for Greece
 
 So instead of one projection, this runs a small ensemble across those
 uncertainties and reports the spread of outcomes. That turns "Kifisia in 2.6 h"
@@ -36,6 +39,11 @@ from amonhen.core.logging import get_logger
 from amonhen.domain.entities import ExposedElement, Incident, WeatherObservation
 from amonhen.services.gazetteer import bearing_deg, haversine_km
 from amonhen.services.fire_weather import initial_spread_index
+from amonhen.services.fuel_moisture import (
+    FuelMoisture,
+    live_moisture_from_ndmi,
+    spread_factor,
+)
 from amonhen.sources.elevation import Terrain
 from amonhen.sources.landcover import LandCover
 from amonhen.services.spread import DEFAULT_FUEL, SpreadEstimate, estimate_spread
@@ -69,6 +77,10 @@ class Scenario:
     #: Multiplies the *measured* grade. Terrain is now observed, not guessed, so
     #: this only stresses how much we trust a 90 m DEM over broken ground.
     slope_factor: float = 1.0
+    #: Multiplies the *measured* live fuel moisture. Below 1.0 means "assume the
+    #: vegetation is drier than the satellite saw" — which is how the worst case
+    #: stresses an index that is first-order and uncalibrated.
+    live_moisture_factor: float = 1.0
 
 
 #: Spans the plausible space in the variables that actually matter. Deliberately
@@ -110,8 +122,9 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "worst_case", "Worst case",
-        "Stronger wind, lighter fuel and a steeper reading of the ground, together.",
-        "phrygana", wind_speed_factor=1.4, slope_factor=1.5,
+        "Stronger wind, lighter and drier fuel, and a steeper reading of the ground, "
+        "all together.",
+        "phrygana", wind_speed_factor=1.4, slope_factor=1.5, live_moisture_factor=0.85,
     ),
 )
 
@@ -125,6 +138,9 @@ class ScenarioProjection:
     #: The fuel this case actually ran with — the measured one unless the
     #: scenario overrode it. Reported so the dossier can say which is which.
     fuel_used: str = DEFAULT_FUEL
+    #: Live fuel moisture this case ran with, % oven-dry weight. None when no
+    #: Sentinel-2 observation was available and the case ran on weather alone.
+    live_moisture_pct: float | None = None
     #: horizon minutes -> GeoJSON polygon
     footprints: dict[int, dict[str, Any]] = field(default_factory=dict)
     areas_ha: dict[int, float] = field(default_factory=dict)
@@ -174,6 +190,8 @@ class EnsembleProjection:
     threats: list[ThreatOutcome] = field(default_factory=list)
     terrain: Terrain | None = None
     land_cover: LandCover | None = None
+    #: Live fuel moisture measured around the fire, when imagery was available.
+    fuel_moisture: FuelMoisture | None = None
     caveats: list[str] = field(default_factory=list)
 
 
@@ -248,6 +266,7 @@ def project(
     horizons_minutes: tuple[int, ...] = DEFAULT_HORIZONS_MINUTES,
     terrain: Terrain | None = None,
     land_cover: LandCover | None = None,
+    fuel_moisture: FuelMoisture | None = None,
 ) -> EnsembleProjection | None:
     """Run every scenario and summarise where they agree and disagree.
 
@@ -302,15 +321,33 @@ def project(
         else:
             scenario_isi = weather.isi
 
+        scenario_fuel = scenario.fuel or measured_fuel
+
+        # Live fuel moisture is re-derived per scenario rather than reused,
+        # because the observed index means different things in different
+        # vegetation: the same NDMI is dangerously dry for phrygana and
+        # unremarkable for pine. A scenario that assumes a different fuel must
+        # therefore re-read the same observation through that fuel's range, or
+        # the fuel-uncertainty cases would carry the measured fuel's moisture
+        # into vegetation it never described.
+        moisture_pct, moisture_factor = _scenario_moisture(
+            fuel_moisture, scenario_fuel, scenario.live_moisture_factor
+        )
+
         spread = estimate_spread(
             isi=scenario_isi,
             wind_direction_deg=wind_direction_for_model,
             wind_speed_kmh=scenario_wind,
-            fuel=scenario.fuel or measured_fuel,
+            fuel=scenario_fuel,
             slope_pct=scenario_slope,
+            live_moisture_factor=moisture_factor,
+            live_moisture_pct=moisture_pct,
         )
         projection = ScenarioProjection(
-            scenario=scenario, spread=spread, fuel_used=scenario.fuel or measured_fuel
+            scenario=scenario,
+            spread=spread,
+            fuel_used=scenario_fuel,
+            live_moisture_pct=moisture_pct,
         )
         for minutes in horizons_minutes:
             footprint = _ellipse_footprint(
@@ -358,7 +395,8 @@ def project(
         threats=threats,
         terrain=terrain,
         land_cover=land_cover,
-        caveats=_caveats(terrain, land_cover),
+        fuel_moisture=fuel_moisture,
+        caveats=_caveats(terrain, land_cover, fuel_moisture),
     )
     log.info(
         "projection.complete",
@@ -369,7 +407,25 @@ def project(
     return result
 
 
-def _caveats(terrain: Terrain | None, land_cover: LandCover | None = None) -> list[str]:
+def _scenario_moisture(
+    observation: FuelMoisture | None, fuel: str, stress: float
+) -> tuple[float | None, float]:
+    """This scenario's live fuel moisture, and the spread multiplier it implies.
+
+    Returns (None, 1.0) when nothing was measured, which leaves the scenario
+    running on weather alone exactly as it did before imagery existed.
+    """
+    if observation is None:
+        return None, 1.0
+    moisture = live_moisture_from_ndmi(observation.ndmi, fuel) * stress
+    return round(moisture, 1), spread_factor(moisture, fuel)
+
+
+def _caveats(
+    terrain: Terrain | None,
+    land_cover: LandCover | None = None,
+    fuel_moisture: FuelMoisture | None = None,
+) -> list[str]:
     """Plain-language limits, stated where the reader will see them."""
     lines = [
         "Shows where fire could spread, not where it will. Roads, rivers, "
@@ -390,6 +446,14 @@ def _caveats(terrain: Terrain | None, land_cover: LandCover | None = None) -> li
             0,
             "No vegetation data for this spot, so a Mediterranean shrubland is assumed. "
             "Pine forest would burn hotter and farmland far less.",
+        )
+
+    if fuel_moisture is not None:
+        lines.insert(
+            0,
+            f"The living plants around this fire were measured as "
+            f"{fuel_moisture.descriptor} from a Sentinel-2 image on "
+            f"{fuel_moisture.observed_at.strftime('%d %b')}. Drier plants burn faster.",
         )
 
     if terrain is None or terrain.sample_count == 0:

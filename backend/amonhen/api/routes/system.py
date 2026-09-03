@@ -31,8 +31,13 @@ async def status() -> SystemStatus:
         SourceStatus(**operations.weather.status()),
         SourceStatus(**operations.elevation.status()),
         SourceStatus(**operations.land_cover.status()),
+        SourceStatus(**operations.imagery.status()),
     ]
-    any_fixture = any(s.mode == "fixture" for s in sources)
+    # Sentinel-2 is excluded from the degraded check on purpose. It reports
+    # "fixture" whenever the optional raster extra is not installed, which is
+    # the documented default — flagging the whole platform degraded for a
+    # feature the operator chose not to install would make the banner useless.
+    any_fixture = any(s.mode == "fixture" for s in sources if s.name != "sentinel2")
 
     return SystemStatus(
         status="degraded" if any_fixture else "ok",

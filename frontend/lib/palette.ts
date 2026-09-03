@@ -6,7 +6,7 @@
  * the single source of truth here and both forms are derived from it.
  */
 
-import type { DangerClass, Severity } from "./types";
+import type { BurnSeverity, DangerClass, Severity } from "./types";
 
 export const SEVERITY_HEX: Record<Severity, string> = {
   informational: "#64748B",
@@ -24,6 +24,29 @@ export const DANGER_HEX: Record<DangerClass, string> = {
   very_high: "#EF4444",
   extreme: "#C026D3",
 };
+
+/**
+ * Burn severity, as the ground actually looks.
+ *
+ * A deliberately different ramp from SEVERITY_HEX: that one is a warning scale
+ * for an active fire, this one is a record of damage already done. Sharing the
+ * palette would have the map say "urgent" about ground that finished burning a
+ * week ago. Greens through ochre to black-red, reading as vegetation lost.
+ */
+export const BURN_SEVERITY_HEX: Record<BurnSeverity, string> = {
+  unburned: "#2E7D4F",
+  low: "#A3B534",
+  moderate_low: "#D99A2B",
+  moderate_high: "#C05621",
+  high: "#7B1D1D",
+};
+
+export const BURN_SEVERITY_ORDER: BurnSeverity[] = [
+  "high",
+  "moderate_high",
+  "moderate_low",
+  "low",
+];
 
 export const SEVERITY_ORDER: Severity[] = [
   "critical",

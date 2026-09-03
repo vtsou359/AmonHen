@@ -44,8 +44,17 @@ async def detections_layer(
 
 @router.get("/perimeters", response_model=GeoJsonFeatureCollection)
 async def perimeters_layer() -> GeoJsonFeatureCollection:
-    """Fire footprints. Note the `confidence` property — these are detection
-    hulls, not surveyed perimeters, and the map must not style them as if they were."""
+    """Fire footprints, of two quite different kinds.
+
+    `method` says which, and the map must style them differently:
+
+    * `detection_hull` — a convex hull around 375 m thermal pixels. A bounding
+      sketch, drawn dashed and faint, and the dossier says so in words.
+    * `sentinel2_dnbr` — a burn scar measured from 20 m imagery. A real boundary.
+
+    Presenting the two with the same styling would be a lie the map tells on its
+    own, without anyone having written it down.
+    """
     picture = await operations.get_picture()
     features = [
         GeoJsonFeature(
@@ -57,6 +66,7 @@ async def perimeters_layer() -> GeoJsonFeatureCollection:
                 "severity": view.incident.severity.value,
                 "area_ha": view.perimeter.area_ha,
                 "method": view.perimeter.method,
+                "is_measured": view.perimeter.method == "sentinel2_dnbr",
                 "confidence": view.perimeter.confidence,
                 "observed_at": view.perimeter.observed_at.isoformat(),
             },
@@ -86,6 +96,7 @@ async def incidents_layer() -> GeoJsonFeatureCollection:
                     "status": incident.status.value,
                     "severity": incident.severity.value,
                     "area_ha": incident.estimated_area_ha,
+                    "area_source": incident.area_source,
                     "growth_rate_ha_per_hour": incident.growth_rate_ha_per_hour,
                     "max_frp_mw": incident.max_frp_mw,
                     "detection_count": incident.detection_count,

@@ -13,8 +13,10 @@ import pytest
 
 from amonhen.domain.entities import ExposedElement, Incident, WeatherObservation
 from amonhen.domain.enums import ExposureKind
+from amonhen.services.fuel_moisture import FuelMoisture, live_moisture_from_ndmi
 from amonhen.services.projection import SCENARIOS, project
 from amonhen.sources.elevation import Terrain
+from amonhen.sources.landcover import LandCover
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
@@ -269,3 +271,90 @@ def test_projection_carries_its_caveats():
     result = project(incident(), weather())
     assert result.caveats
     assert any("could reach" in c for c in result.caveats)
+
+
+# --------------------------------------------------------------------------
+# Live fuel moisture through the ensemble
+# --------------------------------------------------------------------------
+
+
+def moisture(ndmi: float = -0.01, fuel: str = "maquis") -> FuelMoisture:
+    """A Sentinel-2 observation, at a September-typical NDMI for Greek scrub."""
+    return FuelMoisture(
+        ndmi=ndmi,
+        ndvi=0.36,
+        live_moisture_pct=live_moisture_from_ndmi(ndmi, fuel),
+        fuel=fuel,
+        spread_factor=1.0,
+        observed_at=NOW,
+        scene_id="S2B_test",
+        sample_pixels=5000,
+        source="Copernicus Sentinel-2 L2A",
+    )
+
+
+def scrub() -> LandCover:
+    return LandCover(code="323", label="Shrubland", fuel="maquis", source="test")
+
+
+def test_an_unmeasured_fire_projects_exactly_as_before():
+    """Installing the raster extra must not move fires it cannot see."""
+    without = project(incident(), weather(), land_cover=scrub())
+    with_none = project(incident(), weather(), land_cover=scrub(), fuel_moisture=None)
+    assert [p.spread.head_ros_m_per_min for p in without.projections] == [
+        p.spread.head_ros_m_per_min for p in with_none.projections
+    ]
+    assert all(p.live_moisture_pct is None for p in without.projections)
+
+
+def test_dry_vegetation_speeds_every_scenario_up():
+    baseline = project(incident(), weather(), land_cover=scrub())
+    dry = project(
+        incident(), weather(), land_cover=scrub(), fuel_moisture=moisture(ndmi=-0.05)
+    )
+    for before, after in zip(baseline.projections, dry.projections, strict=True):
+        assert after.spread.head_ros_m_per_min > before.spread.head_ros_m_per_min
+
+
+def test_green_vegetation_slows_every_scenario_down():
+    baseline = project(incident(), weather(), land_cover=scrub())
+    green = project(
+        incident(), weather(), land_cover=scrub(), fuel_moisture=moisture(ndmi=0.25)
+    )
+    for before, after in zip(baseline.projections, green.projections, strict=True):
+        assert after.spread.head_ros_m_per_min < before.spread.head_ros_m_per_min
+
+
+def test_moisture_is_re_read_through_each_scenario_own_fuel():
+    """The same NDMI is dangerously dry for phrygana and unremarkable for pine.
+
+    A scenario that assumes different vegetation must re-derive the moisture
+    through that vegetation's range, or the fuel-uncertainty cases would carry
+    the measured fuel's moisture into ground it never described.
+    """
+    result = project(
+        incident(), weather(), land_cover=scrub(), fuel_moisture=moisture(ndmi=0.15)
+    )
+    light = by_id(result, "light_fuel")   # forced to phrygana
+    heavy = by_id(result, "heavy_fuel")   # forced to pine
+    assert light.fuel_used == "phrygana" and heavy.fuel_used == "pine"
+    assert light.live_moisture_pct != heavy.live_moisture_pct
+
+
+def test_the_worst_case_assumes_drier_ground_than_was_measured():
+    """Land cover is 100 m data from 2018 and the moisture mapping is
+    uncalibrated, so the worst case has to stress the observation, not trust it."""
+    result = project(
+        incident(), weather(), land_cover=scrub(), fuel_moisture=moisture(ndmi=0.10)
+    )
+    worst = by_id(result, "worst_case")
+    light = by_id(result, "light_fuel")   # same fuel, unstressed
+    assert worst.live_moisture_pct < light.live_moisture_pct
+
+
+def test_a_measured_fire_says_so_in_its_caveats():
+    result = project(
+        incident(), weather(), land_cover=scrub(), fuel_moisture=moisture()
+    )
+    assert any("Sentinel-2" in caveat for caveat in result.caveats)
+    assert result.fuel_moisture is not None
