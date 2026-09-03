@@ -42,6 +42,7 @@ from typing import Literal
 
 from amonhen.core.logging import get_logger
 from amonhen.domain.entities import Detection
+from amonhen.sources.landcover import LandCover
 
 log = get_logger(__name__)
 
@@ -78,8 +79,18 @@ class Plausibility:
         return self.verdict in ("questionable", "likely_not_wildfire")
 
 
-def assess(detections: list[Detection], now: datetime | None = None) -> Plausibility:
-    """Score a cluster on how much it behaves like a real wildfire."""
+def assess(
+    detections: list[Detection],
+    now: datetime | None = None,
+    land_cover: LandCover | None = None,
+) -> Plausibility:
+    """Score a cluster on how much it behaves like a real wildfire.
+
+    `land_cover` is the one genuinely *independent* input here — everything else
+    is a property of the same satellite pixels. Ground that cannot carry a fire
+    (a quarry, a port, open water) is strong evidence the heat is industrial,
+    and it is evidence that does not come from the sensor that raised the alarm.
+    """
     if not detections:
         return Plausibility(verdict="questionable", score=0.0, reasons=["No detections."])
 
@@ -134,6 +145,19 @@ def assess(detections: list[Detection], now: datetime | None = None) -> Plausibi
             f"Detections spread over {signals['spread_km']:.1f} km — the footprint is moving, "
             f"which a fixed installation cannot do."
         )
+
+    # --- what is actually on the ground -----------------------------------
+    # The only signal here not derived from the same pixels, so it carries
+    # weight: a "fire" on a quarry or a dock is a furnace, a flare or a kiln.
+    if land_cover is not None and land_cover.code:
+        if not land_cover.burnable:
+            score -= 0.30
+            reasons.append(
+                f"The ground here is mapped as {land_cover.descriptor} — there is "
+                f"nothing to burn. Heat from this spot is almost certainly industrial."
+            )
+        else:
+            score += 0.08
 
     # --- corroboration ----------------------------------------------------
     if signals["satellite_count"] >= 2 and signals["detection_count"] >= 6:

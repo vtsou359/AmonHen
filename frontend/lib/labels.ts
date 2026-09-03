@@ -144,3 +144,13 @@ export const VERDICT_HINT: Record<Verdict, string> = {
   likely_not_wildfire:
     "Behaves more like a factory, flare or other fixed heat source than a fire. Still shown, never hidden — open it to see why.",
 };
+
+
+/** Fuel models, in words rather than shorthand. */
+export const FUEL_LABEL: Record<string, string> = {
+  maquis: "dense shrub",
+  phrygana: "low scrub",
+  pine: "pine forest",
+  mixed_forest: "mixed forest",
+  agricultural: "farmland",
+};

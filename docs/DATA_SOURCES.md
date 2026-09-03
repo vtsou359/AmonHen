@@ -57,6 +57,45 @@ a boundary that fails.
 
 Rebuild with `make boundary`.
 
+### CORINE Land Cover — vegetation, and the fuel it implies
+`backend/amonhen/sources/landcover.py`
+
+**CORINE Land Cover 2018**, the European reference dataset, from the EEA. This
+replaced the platform's worst assumption: that the whole country was one uniform
+shrubland.
+
+Queried through the ArcGIS REST `identify` endpoint rather than WMS. That matters
+— `GetFeatureInfo` returns nothing for the EFFIS raster layers, which is why the
+fuel map could be *looked at* but not *used*. `identify` returns a real class
+code for a real point, keyless, as JSON, with no raster processing and no new
+dependency.
+
+**A trap that silently produced plausible nonsense.** ArcGIS computes `identify`
+tolerance in *screen pixels*, derived from `mapExtent` and `imageDisplay`. Pass a
+degenerate extent — the same point as both corners — and that pixel size is
+meaningless, so the service answers with whatever polygon is vaguely nearby.
+Parnitha National Park came back as "Continuous urban fabric". With a real
+extent it correctly returns coniferous forest. Validate any change to those
+parameters against known ground truth before trusting it.
+
+Resolution is 100 m with a 25 ha minimum mapping unit, vintage 2018. This is the
+*landscape*, not this season: good enough to tell pine from pasture, not good
+enough to know a field was harvested last week. The ensemble's two fuel cases
+exist to bracket exactly that uncertainty.
+
+Two Mediterranean-specific calls in the mapping worth knowing about:
+
+* **Olive groves (223) are treated as shrub, not cropland.** They burn readily —
+  the understory carries fire between the trees — and filing them under
+  agriculture would give them the slowest fuel model in the set.
+* **Sclerophyllous vegetation (323) and transitional woodland-shrub (324) both
+  map to maquis.** The latter is post-fire regrowth, and some of the most
+  dangerous ground in Greece.
+
+It also does double duty for the fire/not-fire test: ground that cannot carry a
+fire — quarries, docks, open water — is the only *independent* evidence
+available, since every other signal derives from the same satellite pixels.
+
 ### Copernicus DEM — terrain
 `backend/amonhen/sources/elevation.py`
 

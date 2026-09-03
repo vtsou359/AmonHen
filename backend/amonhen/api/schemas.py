@@ -207,6 +207,17 @@ class TerrainSummary(BaseModel):
     source: str
 
 
+class LandCoverSummary(BaseModel):
+    """What is growing at the fire, and the fuel model it implies."""
+
+    code: str
+    label: str
+    #: None when nothing here can carry a fire.
+    fuel: str | None = None
+    burnable: bool
+    source: str
+
+
 class ProjectionSummary(BaseModel):
     incident_id: str
     generated_at: datetime
@@ -215,4 +226,5 @@ class ProjectionSummary(BaseModel):
     envelope_areas_ha: dict[int, float]
     threats: list[ThreatSummary]
     terrain: TerrainSummary | None = None
+    land_cover: LandCoverSummary | None = None
     caveats: list[str]

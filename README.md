@@ -29,6 +29,7 @@ using it. Add a free NASA key and the same screens become live.
 | | |
 |---|---|
 | **Ingests** | NASA FIRMS active fire detections (VIIRS 375 m, MODIS 1 km) and Open-Meteo fire weather |
+| **Measures fuel** | Vegetation per fire from CORINE Land Cover, so a pine stand and a ploughed field no longer spread identically |
 | **Measures terrain** | Slope and aspect from the Copernicus DEM, so projections run over the real hillside instead of imaginary flat ground |
 | **Screens** | Flags heat detections that behave like factories or flares rather than fires — weak, night-only, never moving |
 | **Clips** | Detections are cut to an actual Greece polygon, not the bounding box FIRMS forces you to ask with — in live data that box was 92% foreign fires |
@@ -37,7 +38,7 @@ using it. Add a free NASA key and the same screens become live.
 | **Projects** | Rate of spread, direction, and length-to-breadth from the FBP equations, with an explicit confidence band |
 | **Ranks** | What is downwind, how far, how soon — weighted by life safety first |
 | **Overlays** | Eleven map layers from Copernicus EFFIS and Esri — official EU fire danger, seasonal anomaly, spread speed, vegetation, terrain relief, settlements — each with its own opacity |
-| **Projects** | A nine-case ensemble across fuel, wind and terrain, drawn as 1 h / 3 h / 6 h envelopes |
+| **Projects** | A nine-case ensemble around the measured fuel, wind and terrain, drawn as 1 h / 3 h / 6 h envelopes |
 | **Explains** | Every incident gets a plain-language brief that states its own uncertainty |
 
 ## Screens
@@ -88,6 +89,7 @@ unchanged — translation happens once, at the display boundary, in
 | Open-Meteo fire weather | hourly | every 30 min |
 | Copernicus EFFIS overlays | daily | date decided server-side, tiles cached 1 h |
 | Copernicus DEM terrain | never | cached 30 days |
+| CORINE land cover | ~6 years | cached 30 days |
 
 The screen polls every 60 s, so a background update appears without a reload.
 **Refresh** forces the whole chain immediately *and bypasses the source caches* —
@@ -201,8 +203,9 @@ Stated plainly, because knowing where a tool stops is part of using it:
   steady wind. Real terrain routinely doubles uphill spread; spotting and crown
   fire can outrun the model entirely. It is for ranking fifteen simultaneous
   fires, not for planning a burn.
-- **Fuel models are borrowed.** The FBP coefficients were derived for Canadian
-  boreal forest. The Mediterranean mappings in `services/spread.py` are the
+- **Fuel models are borrowed.** Which model applies is now measured from CORINE,
+  but the coefficients inside each one were still derived for Canadian boreal
+  forest. The Mediterranean mappings in `services/spread.py` are the
   closest published analogues and are the largest single source of error.
   Calibrating them against Greek fire records is the highest-value next step.
 - **No fuel continuity.** The model will happily carry a fire across a strait,
@@ -230,13 +233,16 @@ is a band.
 **~~1. Terrain.~~ Done.** Copernicus DEM slope and aspect now feed every
 scenario, in each scenario's own direction of travel.
 
-**1. Fuel type per location.** The platform assumes one uniform "maquis" for the
-whole country, using FBP coefficients derived for Canadian boreal forest. The
-EFFIS fuel map is now visible as an overlay, but it cannot be *queried* — WMS
-GetFeatureInfo returns nothing for raster layers — so wiring it into the model
-needs the underlying raster rather than the map service. Calibrating those
-coefficients against Greek fire records is the highest-value modelling work
-available.
+**~~1. Fuel type per location.~~ Done.** CORINE Land Cover 2018 now supplies the
+vegetation at each fire, via the EEA's ArcGIS `identify` endpoint — WMS
+`GetFeatureInfo` returns nothing for raster layers, which is why the EFFIS fuel
+map could be seen but not used.
+
+**1. Calibrate the fuel coefficients against Greek fire records.** The mapping
+from vegetation to spread behaviour still uses FBP coefficients derived for
+Canadian boreal forest; only the *choice* of model is now measured, not the
+model itself. This is the highest-value modelling work remaining, and it needs
+historical Greek fire perimeters to fit against.
 
 **2. Burned area from Sentinel-2 dNBR.** *This* is where bands pay off, and the
 payoff is large: 10–20 m burn-scar delineation replacing a 375 m pixel count
@@ -255,7 +261,7 @@ only way any of the above gets validated rather than merely improved.
 ## Attribution
 
 Active fire data: **NASA FIRMS** (LANCE/EOSDIS). Weather: **Open-Meteo**
-(ECMWF IFS / DWD ICON). Terrain: **Copernicus DEM GLO-90**. Fire danger, fuel and
+(ECMWF IFS / DWD ICON). Terrain: **Copernicus DEM GLO-90**. Vegetation: **CORINE Land Cover 2018** (Copernicus / EEA). Fire danger, fuel and
 behaviour overlays: **Copernicus EMS — EFFIS / GWIS**. Relief: **Esri World
 Hillshade**. Boundaries: **Natural Earth** (public domain). Basemaps: **CARTO**
 and **Esri World Imagery**.
