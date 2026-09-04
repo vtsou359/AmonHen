@@ -21,7 +21,7 @@ from amonhen.api.schemas import (
     ThreatSummary,
 )
 from amonhen.services.burn_scar import BurnScar, BurnScarUnavailable
-from amonhen.services.operations import IncidentView, operations
+from amonhen.services.operations import DEFAULT_DAY_RANGE, IncidentView, operations
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -213,8 +213,15 @@ def _to_projection(view: IncidentView) -> ProjectionSummary | None:
 
 
 @router.post("/refresh", response_model=PictureResponse, summary="Force a rebuild")
-async def refresh(day_range: int = Query(3, ge=1, le=5)) -> PictureResponse:
+async def refresh(
+    day_range: int = Query(DEFAULT_DAY_RANGE, ge=1, le=5),
+) -> PictureResponse:
     """Re-run the whole chain now, ignoring every cache.
+
+    Defaults to the same window the automatic rebuild uses. It used to default
+    to 3 while the scheduled rebuild used 5, so pressing Refresh dropped two
+    days of detections and roughly half the incidents — the opposite of what the
+    button promises.
 
     Bounded to 1-5 days, which is FIRMS' real limit for the area endpoint —
     not the 1-10 this once claimed. Asking for more returns the plain text

@@ -65,6 +65,14 @@ log = get_logger(__name__)
 #: reporting its arbitrary start value rather than the actual drought.
 FWI_WARMUP_DAYS = 45
 
+#: Days of FIRMS history the picture is built from. FIRMS caps this at 5 for the
+#: area endpoint. Defined once because it has to agree in two places: the
+#: automatic rebuild and the Refresh button. When it did not, pressing Refresh
+#: silently narrowed the window from 5 days to 3 and dropped nearly half the
+#: incidents off the map — an operator would have watched fires disappear
+#: because they asked for fresher data.
+DEFAULT_DAY_RANGE = 5
+
 
 @dataclass
 class IncidentView:
@@ -150,7 +158,9 @@ class OperationsService:
             self._picture = await self.rebuild()
             return self._picture
 
-    async def rebuild(self, day_range: int = 5, force: bool = False) -> OperationalPicture:
+    async def rebuild(
+        self, day_range: int = DEFAULT_DAY_RANGE, force: bool = False
+    ) -> OperationalPicture:
         """Run the full chain from scratch.
 
         `force` additionally bypasses the source disk caches, so a manual

@@ -15,7 +15,11 @@ import pytest
 
 from amonhen.domain.entities import Detection, Incident
 from amonhen.services.burn_scar import BurnScar
-from amonhen.services.operations import OperationsService, _apply_measured_area
+from amonhen.services.operations import (
+    DEFAULT_DAY_RANGE,
+    OperationsService,
+    _apply_measured_area,
+)
 from amonhen.services.validation import Plausibility
 
 #: A fixed instant, for the arithmetic that does not consult a clock.
@@ -176,3 +180,33 @@ def test_every_refusal_carries_a_distinct_reason(hours_old, count, name):
     service = OperationsService()
     skip = service._skip_imaging(incident(hours_old=hours_old), detections(count), verdict(name))
     assert skip is not None and skip.reason and skip.detail
+
+
+# --------------------------------------------------------------------------
+# The Refresh button must not quietly ask for less than the automatic rebuild
+# --------------------------------------------------------------------------
+
+
+def test_refresh_asks_for_the_same_window_as_the_automatic_rebuild():
+    """These two defaults live in different files and must agree.
+
+    When they did not — rebuild 5 days, refresh 3 — pressing Refresh dropped two
+    days of detections and took the live picture from 20 incidents to 11. Fires
+    vanished from the map because the operator asked for fresher data, which is
+    the exact opposite of what the button promises.
+    """
+    import inspect
+
+    from amonhen.api.routes.incidents import refresh
+
+    rebuild_default = inspect.signature(OperationsService.rebuild).parameters["day_range"].default
+    refresh_default = inspect.signature(refresh).parameters["day_range"].default.default
+
+    assert rebuild_default == refresh_default == DEFAULT_DAY_RANGE
+
+
+def test_the_day_range_stays_inside_what_firms_accepts():
+    """FIRMS caps the area endpoint at 5 days and answers a larger request with
+    the plain text "Invalid day range" under an HTTP 200 — which the connector
+    reads as an empty product, silently losing every detection."""
+    assert 1 <= DEFAULT_DAY_RANGE <= 5
