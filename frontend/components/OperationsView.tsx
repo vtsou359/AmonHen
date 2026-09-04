@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * The whole screen: top bar, incident list, map, dossier.
+ *
+ * The only component that fetches the operational picture. Everything below it
+ * either reads from SWR's cache by calling the same hook (which dedupes) or
+ * takes what it needs as props, so there is exactly one request for the picture
+ * no matter how many panels want it.
+ */
 import dynamic from "next/dynamic";
 import { usePicture } from "@/lib/api";
 import { IncidentDossier } from "./IncidentDossier";

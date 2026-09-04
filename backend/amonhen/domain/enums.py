@@ -11,6 +11,14 @@ from enum import StrEnum
 
 
 class Satellite(StrEnum):
+    """Which instrument saw a detection.
+
+    Pixel size varies enormously between them — VIIRS is 375 m, MODIS ~1 km at
+    nadir and considerably worse off-nadir — which is why `clustering.estimate_area_ha`
+    reads the footprint FIRMS reports per detection rather than assuming one.
+    Two satellites agreeing also counts as corroboration in the fire/not-fire test.
+    """
+
     VIIRS_SNPP = "viirs_snpp"
     VIIRS_NOAA20 = "viirs_noaa20"
     VIIRS_NOAA21 = "viirs_noaa21"
@@ -30,6 +38,14 @@ class DetectionConfidence(StrEnum):
 
 
 class IncidentStatus(StrEnum):
+    """Where a fire is in its life, inferred from detection recency.
+
+    Inferred, never reported: satellites go quiet for cloud, for smoke and
+    simply for lack of an overpass, so `clustering.derive_status` downgrades
+    slowly and never calls a fire out on one missed pass. CONTROLLED is the
+    exception — it only comes from a responder saying so.
+    """
+
     ACTIVE = "active"          # still producing new detections
     CONTAINED = "contained"    # perimeter stable, no fresh detections at the edge
     CONTROLLED = "controlled"  # declared under control by responders
@@ -48,6 +64,12 @@ class IncidentSeverity(StrEnum):
 
 
 class AssetKind(StrEnum):
+    """A response resource, for the asset-tracking work that is not built yet.
+
+    Defined here so the vocabulary is settled and exported to the frontend
+    before anything depends on it. Nothing currently populates `Asset`.
+    """
+
     AERIAL_TANKER = "aerial_tanker"
     HELICOPTER = "helicopter"
     ENGINE = "engine"
@@ -58,6 +80,8 @@ class AssetKind(StrEnum):
 
 
 class AssetStatus(StrEnum):
+    """What a response resource is currently doing. See `AssetKind`."""
+
     AVAILABLE = "available"
     ASSIGNED = "assigned"
     EN_ROUTE = "en_route"

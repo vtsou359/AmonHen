@@ -1,10 +1,18 @@
 """Terrain, from the Copernicus DEM.
 
-This closes the largest accuracy gap in the platform. `estimate_spread()` has
-always accepted a slope and nothing ever supplied one, so every projection was
-computed on imaginary flat ground — while fire runs uphill roughly exponentially
-with grade. In Greek terrain that is routinely a factor of two, which is the
-difference between a village having four hours and having two.
+This closed the largest accuracy gap the platform had. `estimate_spread()`
+accepted a slope from the beginning and nothing supplied one, so every
+projection ran on imaginary flat ground — while fire runs uphill roughly
+exponentially with grade. In Greek terrain that is routinely a factor of two,
+which is the difference between a village having four hours and having two.
+
+What this module produces is the *full gradient*: a steepest grade and the
+compass bearing it rises along. Both go to `estimate_spread` together, which
+converts the grade to an equivalent wind speed and adds it to the real wind as a
+vector — so the hill helps decide which way the fire goes, not only how fast.
+See "Slope is a wind, not a multiplier" in `services/spread.py` for why the
+obvious alternative, resolving the slope along a direction chosen in advance,
+cannot work.
 
 Source: Open-Meteo's elevation endpoint, which serves Copernicus DEM GLO-90.
 Chosen over the Copernicus Data Space or OpenTopography for one reason that

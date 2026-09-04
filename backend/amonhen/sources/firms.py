@@ -67,7 +67,14 @@ class FirmsSource(DataSource[Detection]):
     async def _fetch_live(
         self,
         bbox: tuple[float, float, float, float] | None = None,
-        day_range: int = 2,  # FIRMS area endpoint accepts 1-5 only
+        # FIRMS' area endpoint accepts 1-5 only, and answers anything larger
+        # with the plain text "Invalid day range" under an HTTP 200 — which
+        # `_parse_csv` reads as an empty product, silently losing every
+        # detection. This default is a floor for direct callers; the platform
+        # always passes an explicit value from
+        # `services.operations.DEFAULT_DAY_RANGE`, which is the number that
+        # decides what the map shows.
+        day_range: int = 2,
         products: list[str] | None = None,
         force: bool = False,
         **_: Any,

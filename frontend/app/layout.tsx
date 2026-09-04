@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Amon Hen — Fire Intelligence",
   description:
-    "Decision support across the full fire management cycle: prevention, preparedness, response, recovery and restoration.",
+    "Monitoring and projection for wildfires in Greece, from open satellite data.",
 };
 
 export const viewport: Viewport = {

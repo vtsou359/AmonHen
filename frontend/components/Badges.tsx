@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * The small coloured chips: severity, fire danger, status.
+ *
+ * Colour comes from `lib/palette`, wording from `lib/labels`, and every chip
+ * carries the matching HINT as its `title`. That pairing is deliberate — the
+ * labels are deliberately plain ("Serious", not "major"), so the tooltip is
+ * where the precise meaning lives for anyone who wants it.
+ */
 import clsx from "clsx";
 import { DANGER_HEX, SEVERITY_HEX } from "@/lib/palette";
 import {

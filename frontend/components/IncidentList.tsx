@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * The left-hand incident list: search, sort, and one row per fire.
+ *
+ * Sorting and filtering happen here on the already-fetched picture rather than
+ * on the server. The list is tens of rows, not thousands, so a round-trip per
+ * keystroke would buy nothing and cost responsiveness.
+ *
+ * Rows show suspected non-fires by default. Hiding them without being asked
+ * would eventually hide a real fire that happened to look odd, and nobody
+ * would know to go looking — hence the explicit checkbox and its count.
+ */
 import { useMemo, useState } from "react";
 import clsx from "clsx";
 import { formatArea, formatLeadTime, formatRelative } from "@/lib/format";

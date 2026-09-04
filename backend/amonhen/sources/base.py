@@ -130,14 +130,51 @@ class DataSource(ABC, Generic[T]):
         }
 
     # ------------------------------------------------------------- subclass
+    #
+    # Everything below is the contract for adding a new feed. A minimal source
+    # sets the four class attributes above and implements the two abstract
+    # methods; `fetch()` handles caching, credential checks, retries, logging
+    # and the fixture fallback on its behalf.
+    #
+    # See `sources/landcover.py` for a short worked example, or
+    # `sources/sentinel2.py` for one that also overrides `is_live` and
+    # `status()`.
 
     @abstractmethod
-    async def _fetch_live(self, **kwargs: Any) -> list[T]: ...
+    async def _fetch_live(self, **kwargs: Any) -> list[T]:
+        """Talk to the network and return records.
+
+        Called only when `is_live` is True. Raise freely on failure — `fetch()`
+        catches everything and falls back to `_load_fixture`, so there is no
+        need to handle upstream errors here.
+
+        Implementations are expected to consult `_cache_read` before making a
+        request and `_cache_write` after, since the base class deliberately does
+        not cache for you: only the subclass knows what makes a good cache key
+        for its own parameters. Honour a `force=True` keyword by passing it
+        through to `_cache_read`, which is what makes the Refresh button real.
+        """
 
     @abstractmethod
-    def _load_fixture(self, **kwargs: Any) -> list[T]: ...
+    def _load_fixture(self, **kwargs: Any) -> list[T]:
+        """Return the bundled sample, used whenever live data is unavailable.
+
+        Synchronous, and must never raise or reach the network.
+
+        The honest answer is sometimes an empty list. A source whose product is
+        a *measurement* — terrain, vegetation, imagery — should return nothing
+        rather than invent a plausible value, because a fabricated reading
+        silently changes every number computed from it. `elevation.py` returns
+        an explicit "flat, unavailable" record and `sentinel2.py` returns `[]`
+        for exactly this reason.
+        """
 
     def _has_credentials(self) -> bool:
+        """Whether the credentials this source needs are configured.
+
+        Only consulted when `requires_credentials` is True. Override it to read
+        the relevant key off `settings`; the default assumes it is present.
+        """
         return True
 
     # -------------------------------------------------------------- helpers

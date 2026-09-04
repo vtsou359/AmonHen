@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * The hover tooltip for anything drawn on the map.
+ *
+ * One component for four different kinds of feature — detection, incident,
+ * exposure, projection — because they share a frame and only differ in body.
+ * `TooltipState.properties` is whatever GeoJSON properties the layer carried,
+ * so the shape is per-kind and typed loosely on purpose; the layer that raised
+ * the hover decides what is worth showing.
+ */
 import { formatArea, formatLeadTime, formatRelative, titleCase } from "@/lib/format";
 
 export interface TooltipState {

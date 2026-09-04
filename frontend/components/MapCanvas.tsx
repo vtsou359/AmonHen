@@ -1,5 +1,27 @@
 "use client";
 
+/**
+ * The map: a MapLibre basemap with a deck.gl overlay drawn on top.
+ *
+ * MapLibre renders the basemap and the Copernicus raster overlays; deck.gl
+ * renders everything of ours — detections, perimeters, incidents, exposure,
+ * projections — into its own canvas above it. They are composed rather than
+ * interleaved, which keeps our layers independent of whatever style the
+ * basemap happens to be.
+ *
+ * Layout, roughly top to bottom:
+ *
+ *   - map init, readiness, and the load-failure handler
+ *   - a ResizeObserver, because the container is often 0x0 at mount
+ *   - basemap swapping, which discards and re-adds the overlays
+ *   - deck.gl layer construction, one block per toggleable layer
+ *   - `syncOverlays`, the reconcile for the Copernicus raster layers
+ *
+ * Several comments in here record behaviour measured against the running app
+ * that contradicts what the MapLibre API appears to promise — `isStyleLoaded()`
+ * reading false on a working map, `idle` never firing. Each one cost a bug;
+ * please read them before "simplifying".
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
 // MapLibre GL v6 is ESM-only and dropped its default export, so the map
 // class and controls are imported by name.
@@ -41,6 +63,14 @@ setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
  */
 const FAILURES_BEFORE_REPORTING = 8;
 
+/**
+ * How long a failure may stand unanswered before it is reported anyway.
+ *
+ * Covers the case a count cannot: a style that fails once and then simply never
+ * loads. Long enough that a single blip on a working map recovers first.
+ */
+const SILENCE_BEFORE_REPORTING_MS = 4000;
+
 /** How long to wait before retrying an overlay reconcile that did not take. */
 const OVERLAY_SYNC_RETRY_MS = 150;
 /** ~3 s of retries. Past that the style is not coming and polling is waste. */
@@ -55,14 +85,6 @@ type OverlayRefs = {
   state: { current: Record<string, { enabled: boolean; opacity: number }> };
   time: { current: string };
 };
-
-/**
- * How long a failure may stand unanswered before it is reported anyway.
- *
- * Covers the case a count cannot: a style that fails once and then simply never
- * loads. Long enough that a single blip on a working map recovers first.
- */
-const SILENCE_BEFORE_REPORTING_MS = 4000;
 
 export function MapCanvas() {
   const container = useRef<HTMLDivElement>(null);
@@ -135,7 +157,8 @@ export function MapCanvas() {
     instance.once("render", markReady);
 
     // Safety net for style changes we did not initiate. The authoritative
-    // re-add happens in the basemap effect below, on `idle`.
+    // re-add across a deliberate basemap swap is `settleOverlays`, in the
+    // basemap effect below.
     instance.on("styledata", () => {
       syncOverlays(instance, overlayRefs);
     });

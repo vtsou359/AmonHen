@@ -137,11 +137,19 @@ backend/          Python — FastAPI, the science, the ingest
     services/     The intelligence: FWI, clustering, spread, exposure, operations
     api/          Routes and wire schemas
     ingest/       Scheduled refresh
-  tests/          55 tests, including FWI validated against Van Wagner (1987)
+  tests/          251 tests, including FWI validated against Van Wagner (1987)
 frontend/         Next.js 16, React 19, Tailwind 4, MapLibre 6, deck.gl 9
 data/fixtures/    The bundled demo scenario
-docs/             Architecture and data source notes
+docs/             Architecture, data sources, and a guide for working on it
 ```
+
+## Working on it
+
+[docs/DEVELOPING.md](docs/DEVELOPING.md) is the orientation guide: where to
+start reading, how to add a data source, and the conventions that are not
+obvious from the code — chiefly that this codebase never invents a measurement,
+and that its comments record what was *measured* rather than what an API
+promises.
 
 ## Common tasks
 
