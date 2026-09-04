@@ -56,6 +56,25 @@ DEFAULT_HORIZONS_MINUTES: tuple[int, ...] = (60, 180, 360)
 
 KM_PER_DEGREE_LAT = 111.32
 
+#: A head run beyond this in one horizon is worth flagging in words.
+#:
+#: Not a cap. The arithmetic is right, and clipping a number to make it look
+#: reasonable would be worse than printing it.
+#:
+#: Set at 50 km deliberately. Measured across a live Greek picture, more than
+#: half of all incidents project a six-hour run past 25 km, so a threshold there
+#: would fire on most of the list and be read as wallpaper. 50 km in six hours is
+#: 8.3 km/h sustained in one direction, which is beyond any Mediterranean fire
+#: run on record — the 2018 Mati fire, the worst in recent Greek memory, covered
+#: roughly 10 km in about 90 minutes and did not keep it up.
+#:
+#: That most incidents sit between the two figures is itself the finding: these
+#: projections assume wind, fuel and terrain hold unchanged for the whole
+#: horizon, and the six-hour band inherits every bit of that. The real fix is
+#: calibrating the fuel coefficients against Greek fire records — see the README
+#: roadmap — not moving this number.
+IMPLAUSIBLE_RUN_KM = 50.0
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -391,6 +410,13 @@ def project(
 
     threats = _score_threats(incident, projections, exposed or [], max(horizons_minutes))
 
+    # How far the fastest case runs over the longest horizon, in a straight line.
+    longest_minutes = max(horizons_minutes)
+    furthest_km = max(
+        (p.spread.head_ros_m_per_min * longest_minutes / 1000.0 for p in projections),
+        default=0.0,
+    )
+
     result = EnsembleProjection(
         incident_id=incident.id,
         generated_at=datetime.now(UTC),
@@ -403,7 +429,9 @@ def project(
         terrain=terrain,
         land_cover=land_cover,
         fuel_moisture=fuel_moisture,
-        caveats=_caveats(terrain, land_cover, fuel_moisture),
+        caveats=_caveats(
+            terrain, land_cover, fuel_moisture, furthest_km, longest_minutes
+        ),
     )
     log.info(
         "projection.complete",
@@ -432,6 +460,8 @@ def _caveats(
     terrain: Terrain | None,
     land_cover: LandCover | None = None,
     fuel_moisture: FuelMoisture | None = None,
+    furthest_km: float = 0.0,
+    longest_minutes: int = 0,
 ) -> list[str]:
     """Plain-language limits, stated where the reader will see them."""
     lines = [
@@ -442,6 +472,16 @@ def _caveats(
         "The shaded area is 'could reach'. The smaller core is the part every "
         "scenario agrees on.",
     ]
+
+    # The largest area on the panel deserves the loudest caveat when the run
+    # behind it is one no fire has actually made.
+    if furthest_km >= IMPLAUSIBLE_RUN_KM and longest_minutes:
+        lines.append(
+            f"The largest case here runs {furthest_km:.0f} km in "
+            f"{longest_minutes // 60} hours without slowing, turning or running "
+            f"out of fuel. Real fires do all three. Read the biggest figure as an "
+            f"outer bound, not a forecast."
+        )
     if land_cover is not None and land_cover.fuel:
         lines.insert(
             0,

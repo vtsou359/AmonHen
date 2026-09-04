@@ -15,7 +15,7 @@ from amonhen.domain.entities import ExposedElement, Incident, WeatherObservation
 from amonhen.domain.enums import ExposureKind
 from amonhen.services.fuel_moisture import FuelMoisture, live_moisture_from_ndmi
 from amonhen.services.fire_weather import initial_spread_index
-from amonhen.services.projection import SCENARIOS, project
+from amonhen.services.projection import IMPLAUSIBLE_RUN_KM, SCENARIOS, project
 from amonhen.services.spread import slope_equivalent_wind_kmh
 from amonhen.sources.elevation import Terrain
 from amonhen.sources.landcover import LandCover
@@ -446,3 +446,34 @@ def test_a_measured_fire_says_so_in_its_caveats():
     )
     assert any("Sentinel-2" in caveat for caveat in result.caveats)
     assert result.fuel_moisture is not None
+
+
+def test_an_implausibly_long_run_says_so_in_words():
+    """The biggest number on the panel gets the loudest caveat.
+
+    A live incident in extreme conditions on phrygana projected a 210,000 ha
+    six-hour envelope, from a head run of 88 km without slowing or turning. The
+    arithmetic is right and the figure is not clipped — clipping a number to
+    make it look reasonable would be worse than printing it — but it must not
+    appear as a quiet area total.
+    """
+    fast = weather(wind_from_deg=0.0, wind_speed_kmh=70.0)
+    result = project(
+        incident(), fast,
+        land_cover=LandCover(code="321", label="Low scrub", fuel="phrygana", source="test"),
+        terrain=hillside(slope_pct=25.0, aspect_deg=180.0),
+    )
+    longest = max(result.horizons_minutes)
+    furthest_km = max(p.spread.head_ros_m_per_min * longest / 1000.0 for p in result.projections)
+    assert furthest_km >= IMPLAUSIBLE_RUN_KM, "fixture is not fast enough to trigger the caveat"
+    assert any("outer bound" in c for c in result.caveats), result.caveats
+
+
+def test_a_modest_fire_is_not_lectured_about_its_run():
+    """The caveat has to stay rare, or it becomes wallpaper and stops being read."""
+    slow = weather(wind_from_deg=0.0, wind_speed_kmh=5.0)
+    result = project(
+        incident(), slow,
+        land_cover=LandCover(code="313", label="Mixed forest", fuel="mixed_forest", source="test"),
+    )
+    assert not any("outer bound" in c for c in result.caveats)
