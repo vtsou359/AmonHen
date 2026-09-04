@@ -11,10 +11,42 @@ This runs in microseconds and is meant for triage — ranking which of fifteen
 simultaneous fires deserves the next aircraft, and giving a defensible order of
 magnitude for evacuation lead time.
 
-Every number this module returns should be read as "roughly, on flat ground, in
-uniform fuel, if the wind holds". The three assumptions it names are exactly the
-three that break in real Greek terrain, so the API reports a confidence band
-rather than a single number, and the UI must show it that way.
+Every number this module returns should be read as "roughly, in uniform fuel, if
+the wind holds". The assumptions it names are exactly the ones that break in real
+Greek terrain, so the API reports a confidence band rather than a single number,
+and the UI must show it that way.
+
+----------------------------------------------------------------------------
+Slope is a wind, not a multiplier
+----------------------------------------------------------------------------
+
+The obvious way to add terrain is to multiply the head rate of spread by a slope
+factor. It is also wrong, and wrong in a way that is invisible until the wind
+drops.
+
+The ellipse's elongation comes from wind alone. At 2 km/h the length-to-breadth
+ratio is 1.02 — the fire is a circle — so the head, flank and back rates are all
+nearly equal. Multiplying "the head rate" by 5 for a 52% slope therefore
+multiplies *every* direction by 5, including straight downhill. On a live
+incident that produced a 40 km circle covering 125,000 ha, from a fire whose
+measured burn scar was 18 ha.
+
+A hill rises one way. So slope is handled the way the FBP System itself handles
+it: converted to the wind speed that would produce the same increase in spread,
+then **added to the real wind as a vector**. Three things follow, all of them
+right:
+
+* the boost points somewhere, instead of everywhere;
+* it elongates the ellipse rather than inflating a circle, because it enters
+  through the same term wind does;
+* in light wind on steep ground the resultant points uphill, which is what fires
+  actually do, and which the model previously needed a hand-written special case
+  to express.
+
+The conversion is exact rather than fitted. Wind enters rate of spread only
+through ISI, as `exp(0.05039 * W)`, so a slope factor SF is worth
+`ln(SF) / 0.05039` km/h of wind. A 52% grade comes out at 32 km/h, which is a
+statement about a hillside that a fire officer can argue with.
 """
 
 from __future__ import annotations
@@ -23,6 +55,16 @@ import math
 from dataclasses import dataclass
 
 from amonhen.services.gazetteer import compass_point
+
+#: Wind's coefficient inside the Initial Spread Index, `exp(0.05039 * W)`. It
+#: appears here rather than being imported from `fire_weather` because this
+#: module inverts it — see `slope_equivalent_wind_kmh`.
+ISI_WIND_COEFFICIENT = 0.05039
+
+#: Van Wagner's slope factor saturates at a 60% grade. Above roughly 30-35
+#: degrees the flame front attaches to the slope and steepening stops helping,
+#: so the cap is physical rather than defensive.
+MAX_EFFECTIVE_SLOPE = 0.60
 
 # --------------------------------------------------------------------------
 # Fuel models
@@ -102,12 +144,64 @@ class SpreadEstimate:
         return self.head_ros_m_per_min * (1.0 - eccentricity) / denominator
 
 
+def slope_factor(slope_pct: float) -> float:
+    """Van Wagner's upslope multiplier for a grade, saturating at 60%."""
+    if slope_pct <= 0.0:
+        return 1.0
+    return math.exp(3.533 * min(slope_pct / 100.0, MAX_EFFECTIVE_SLOPE) ** 1.2)
+
+
+def slope_equivalent_wind_kmh(slope_pct: float) -> float:
+    """The wind speed that would push a fire as hard as this hill does.
+
+    Exact, not fitted. Wind reaches rate of spread only through ISI, as
+    `exp(0.05039 * W)`, so a slope factor SF is worth `ln(SF) / 0.05039` km/h.
+    Inverting it this way is what lets slope be added to wind as a vector
+    instead of multiplying a shape that has no direction — see the module
+    docstring for why that distinction is the whole point.
+
+    A 52% grade comes out at 32 km/h.
+    """
+    return math.log(slope_factor(slope_pct)) / ISI_WIND_COEFFICIENT
+
+
+def _combine_wind_and_slope(
+    wind_speed_kmh: float,
+    wind_spread_bearing_deg: float,
+    slope_pct: float,
+    slope_aspect_deg: float | None,
+) -> tuple[float, float]:
+    """Add the slope's equivalent wind to the real wind, as vectors.
+
+    Returns (effective speed, bearing the fire is pushed toward). With no
+    terrain this returns the wind unchanged, so a caller that supplies no slope
+    gets exactly the flat-ground answer it always did.
+
+    Note there is no downhill case to special-case any more. The slope vector
+    always points uphill; a fire being blown downhill simply has the two vectors
+    partly cancel, which is the physics rather than a rule about it.
+    """
+    east = wind_speed_kmh * math.sin(math.radians(wind_spread_bearing_deg))
+    north = wind_speed_kmh * math.cos(math.radians(wind_spread_bearing_deg))
+
+    if slope_aspect_deg is not None and slope_pct > 0.0:
+        equivalent = slope_equivalent_wind_kmh(slope_pct)
+        east += equivalent * math.sin(math.radians(slope_aspect_deg))
+        north += equivalent * math.cos(math.radians(slope_aspect_deg))
+
+    speed = math.hypot(east, north)
+    if speed < 1e-6:
+        return 0.0, wind_spread_bearing_deg
+    return speed, (math.degrees(math.atan2(east, north)) + 360.0) % 360.0
+
+
 def estimate_spread(
     isi: float,
     wind_direction_deg: float,
     wind_speed_kmh: float,
     fuel: str = DEFAULT_FUEL,
     slope_pct: float = 0.0,
+    slope_aspect_deg: float | None = None,
     live_moisture_factor: float = 1.0,
     live_moisture_pct: float | None = None,
 ) -> SpreadEstimate:
@@ -118,8 +212,11 @@ def estimate_spread(
     conversion that has caused real operational mistakes, so it is done once,
     here, and never again anywhere else in the codebase.
 
-    `slope_pct` is the grade *along the direction of spread*, signed: positive
-    uphill, negative downhill. Callers get it from `Terrain.slope_toward()`.
+    `slope_pct` is the **steepest** grade, unsigned, and `slope_aspect_deg` the
+    compass bearing of steepest ascent — both straight off `Terrain`. Earlier
+    versions took the grade already resolved along the direction of travel,
+    which cannot work now that the direction of travel is an *output*: the hill
+    helps decide where the fire goes. Pass no aspect and terrain is ignored.
 
     `live_moisture_factor` scales the head rate for how wet the *living*
     vegetation is, measured from Sentinel-2. The FBP equations take dead fuel
@@ -129,42 +226,44 @@ def estimate_spread(
     """
     model = FUEL_MODELS.get(fuel, FUEL_MODELS[DEFAULT_FUEL])
 
-    head_ros = model.a * (1.0 - math.exp(-model.b * max(isi, 0.0))) ** model.c
+    # Wind and slope combine into one push, with one direction. See the module
+    # docstring: treating slope as a multiplier on a shape that has no direction
+    # applied it in every direction at once, downhill included.
+    wind_spread_bearing = (wind_direction_deg + 180.0) % 360.0
+    effective_wind, spread_direction = _combine_wind_and_slope(
+        wind_speed_kmh, wind_spread_bearing, slope_pct, slope_aspect_deg
+    )
+
+    # ISI is rescaled rather than recomputed, which needs no FFMC and is exact:
+    # wind appears in ISI only as exp(0.05039 * W), so the ratio between two
+    # wind speeds depends on nothing else.
+    effective_isi = max(isi, 0.0) * math.exp(
+        ISI_WIND_COEFFICIENT * (effective_wind - wind_speed_kmh)
+    )
+
+    head_ros = model.a * (1.0 - math.exp(-model.b * effective_isi)) ** model.c
     head_ros *= live_moisture_factor
 
-    # Slope effect (Van Wagner): fire runs uphill roughly exponentially with grade.
-    #
-    # Now that real terrain is supplied, `slope_pct` can be negative — a fire
-    # heading downhill. FBP defines the factor for upslope only, and rather than
-    # invent a downslope reduction we apply none: the fire is treated as if on
-    # the flat. That over-predicts slightly on descending ground, which is the
-    # safe direction to be wrong in for an evacuation tool.
-    if slope_pct > 0:
-        head_ros *= math.exp(3.533 * min(slope_pct / 100.0, 0.6) ** 1.2)
-
-    length_to_breadth = 1.0 + 8.729 * (1.0 - math.exp(-0.030 * max(wind_speed_kmh, 0.0))) ** 2.155
+    # Elongation follows the *combined* push. This is what stops a steep hill in
+    # still air producing a huge circle: the slope's equivalent wind stretches
+    # the ellipse exactly as a real wind of that speed would.
+    length_to_breadth = 1.0 + 8.729 * (1.0 - math.exp(-0.030 * effective_wind)) ** 2.155
     length_to_breadth = max(length_to_breadth, 1.0)
 
     eccentricity = math.sqrt(max(length_to_breadth**2 - 1.0, 0.0)) / length_to_breadth
     back_ros = head_ros * (1.0 - eccentricity) / (1.0 + eccentricity)
     flank_ros = (head_ros + back_ros) / (2.0 * length_to_breadth)
 
-    spread_direction = (wind_direction_deg + 180.0) % 360.0
-
     caveats = [
         f"Fuel treated as uniform {model.label.lower()} — {model.note}",
-        "No terrain data — treated as flat ground, which under-predicts on slopes."
-        if slope_pct == 0
-        else (
-            f"Measured {slope_pct:.0f}% uphill grade along the spread direction."
-            if slope_pct > 0
-            else f"Heading downhill ({slope_pct:.0f}% grade); treated as flat, so this "
-            "estimate is on the high side."
-        ),
+        _slope_caveat(slope_pct, slope_aspect_deg, wind_speed_kmh, effective_wind),
         "Spotting and crown fire are not modelled; both can outrun this estimate.",
     ]
-    if wind_speed_kmh > 40:
-        caveats.append("Above ~40 km/h, spread becomes erratic and this model degrades sharply.")
+    if effective_wind > 40:
+        caveats.append(
+            "Above ~40 km/h of combined wind and slope push, spread becomes erratic "
+            "and this model degrades sharply."
+        )
     if live_moisture_pct is not None:
         direction = "faster" if live_moisture_factor > 1.0 else "slower"
         caveats.append(
@@ -184,9 +283,31 @@ def estimate_spread(
         direction_deg=round(spread_direction, 1),
         direction_label=compass_point(spread_direction),
         fuel_model=model.key,
-        confidence="low" if wind_speed_kmh > 40 or isi > 30 else "moderate",
+        confidence="low" if effective_wind > 40 or effective_isi > 30 else "moderate",
         caveats=caveats,
     )
+
+
+def _slope_caveat(
+    slope_pct: float,
+    slope_aspect_deg: float | None,
+    wind_speed_kmh: float,
+    effective_wind_kmh: float,
+) -> str:
+    """Say what the terrain did, in the terms it actually did it in."""
+    if slope_aspect_deg is None or slope_pct <= 0:
+        return "No terrain data — treated as flat ground, which under-predicts on slopes."
+
+    equivalent = slope_equivalent_wind_kmh(slope_pct)
+    line = (
+        f"A {slope_pct:.0f}% slope pushes the fire uphill about as hard as "
+        f"{equivalent:.0f} km/h of wind would."
+    )
+    # When the hill outweighs the forecast wind the fire goes where the hill
+    # says, not where the forecast does, and that is worth stating outright.
+    if equivalent > wind_speed_kmh * 2 and effective_wind_kmh > wind_speed_kmh:
+        line += " With the wind this light, the slope is what decides the direction."
+    return line
 
 
 def minutes_to_reach(

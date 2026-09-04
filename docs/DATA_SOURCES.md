@@ -111,9 +111,13 @@ computed on flat ground while fire runs uphill roughly exponentially with grade.
 
 What is computed: a least-squares **plane fit** through a 5×5 grid at 400 m
 spacing (one request, 25 points). That yields a gradient, from which slope
-percentage, aspect (compass bearing of steepest ascent) and — crucially —
-`slope_toward(bearing)` are derived. Only the component along the direction of
-travel matters: a 40% hill does nothing for a fire running across it.
+percentage and aspect (the compass bearing of steepest ascent) are derived. Both
+go to the spread model whole: it converts the grade to an equivalent wind speed
+and adds it to the real wind as a vector, so the hill helps decide *where* the
+fire goes rather than only how fast. See "Slope is a wind, not a multiplier" in
+ARCHITECTURE.md for why resolving the grade along a pre-chosen direction — which
+is what `Terrain.slope_toward()` does, and what this used to feed — cannot work
+once the direction is an output of the model.
 
 A plane fit rather than a central difference so one noisy DEM cell cannot swing
 the result. Cached for 30 days, and deliberately exempt from the Refresh

@@ -110,14 +110,33 @@ async def spread_preview(
     wind_direction_deg: float = Query(..., ge=0, lt=360),
     wind_speed_kmh: float = Query(..., ge=0, le=200),
     fuel: str = Query("maquis"),
-    slope_pct: float = Query(0.0, ge=0, le=100),
+    slope_pct: float = Query(0.0, ge=0, le=100, description="Steepest grade, unsigned"),
+    slope_aspect_deg: float | None = Query(
+        None,
+        ge=0,
+        lt=360,
+        description=(
+            "Compass bearing of steepest ascent. Omit and the hill is assumed to rise "
+            "in the direction the fire is already heading, i.e. the pure upslope run."
+        ),
+    ),
 ) -> dict[str, object]:
-    """What-if spread calculator. Backs the scenario panel in the UI."""
+    """What-if spread calculator. Backs the scenario panel in the UI.
+
+    An aspect is required for slope to do anything, because slope is now added
+    to wind as a vector rather than multiplying the rate of spread. Callers that
+    only supply a grade get the straight-uphill case, which is what a bare
+    `slope_pct` meant before the change.
+    """
+    if slope_aspect_deg is None and slope_pct > 0:
+        slope_aspect_deg = (wind_direction_deg + 180.0) % 360.0
+
     estimate = estimate_spread(
         isi=isi,
         wind_direction_deg=wind_direction_deg,
         wind_speed_kmh=wind_speed_kmh,
         fuel=fuel,
         slope_pct=slope_pct,
+        slope_aspect_deg=slope_aspect_deg,
     )
     return vars(estimate)

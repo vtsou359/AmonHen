@@ -14,7 +14,9 @@ import pytest
 from amonhen.domain.entities import ExposedElement, Incident, WeatherObservation
 from amonhen.domain.enums import ExposureKind
 from amonhen.services.fuel_moisture import FuelMoisture, live_moisture_from_ndmi
+from amonhen.services.fire_weather import initial_spread_index
 from amonhen.services.projection import SCENARIOS, project
+from amonhen.services.spread import slope_equivalent_wind_kmh
 from amonhen.sources.elevation import Terrain
 from amonhen.sources.landcover import LandCover
 
@@ -32,18 +34,24 @@ def incident() -> Incident:
     )
 
 
-def weather(wind_from_deg: float = 0.0) -> WeatherObservation:
-    """A northerly on a hot dry day, with FFMC present so ISI can be recomputed."""
+def weather(wind_from_deg: float = 0.0, wind_speed_kmh: float = 25.0) -> WeatherObservation:
+    """A northerly on a hot dry day.
+
+    FFMC is present so ISI can be derived from whatever wind the caller asks
+    for, and `isi` is set to match rather than being pinned at a constant — a
+    fixture whose ISI describes a different wind than its `wind_speed_kmh` would
+    test the model against conditions that cannot occur.
+    """
     return WeatherObservation(
         latitude=38.10,
         longitude=23.80,
         observed_at=NOW,
         temperature_c=35.0,
         relative_humidity_pct=20.0,
-        wind_speed_kmh=25.0,
+        wind_speed_kmh=wind_speed_kmh,
         wind_direction_deg=wind_from_deg,
         ffmc=92.0,
-        isi=14.0,
+        isi=round(initial_spread_index(92.0, wind_speed_kmh), 2),
     )
 
 
@@ -122,36 +130,116 @@ def test_uphill_run_is_faster_than_the_same_fire_on_the_flat():
     )
 
 
-def test_downhill_is_never_boosted():
-    """Heading downhill must not speed the fire up.
+def test_heading_downhill_is_slower_than_the_same_fire_on_the_flat():
+    """Slope opposes the wind when the fire is pushed downhill.
 
-    The slope factor is defined for upslope only; we apply none going down
-    rather than invent a reduction, which over-predicts slightly — the safe
-    direction to be wrong for an evacuation tool.
+    This replaces an older rule that treated descending ground as flat, on the
+    argument that over-predicting was the safe direction to be wrong. That rule
+    existed because the model could not represent direction: the slope factor
+    multiplied a shape, so applying it downhill would have sped the fire up.
+    Now that slope is a vector it simply subtracts, which is the physics, and
+    the safety margin lives where it belongs — in the `gusting` and
+    `worst_case` members of the ensemble.
     """
     flat = project(incident(), weather(wind_from_deg=0.0))
     downhill = project(
         incident(), weather(wind_from_deg=0.0), terrain=hillside(slope_pct=35.0, aspect_deg=0.0)
     )
 
-    assert by_id(downhill, "expected").spread.head_ros_m_per_min == pytest.approx(
-        by_id(flat, "expected").spread.head_ros_m_per_min
+    assert (
+        by_id(downhill, "expected").spread.head_ros_m_per_min
+        < by_id(flat, "expected").spread.head_ros_m_per_min
     )
 
 
-def test_terrain_driven_scenario_climbs_instead_of_following_wind():
-    """On steep ground in light wind a fire follows the hill.
+def test_slope_never_speeds_a_fire_up_in_the_direction_it_is_not_climbing():
+    """The bug this whole change exists for.
 
-    This is the scenario that can point somewhere the forecast never would, so
-    it is worth pinning: the wind blows from the north (fire would run south),
-    but the hill rises east, so this case must head east.
+    The slope factor used to multiply the head rate, and head, flank and back
+    are all derived from head. In light wind the ellipse is nearly a circle, so
+    a 5x upslope boost was applied in every direction at once — including
+    straight downhill. On a live incident that produced a 40 km circle of
+    125,000 ha around a fire whose measured scar was 18 ha.
+    """
+    still_air = weather(wind_from_deg=0.0, wind_speed_kmh=2.0)
+
+    flat = project(incident(), still_air)
+    steep = project(incident(), still_air, terrain=hillside(slope_pct=52.0, aspect_deg=0.0))
+
+    uphill = by_id(steep, "expected").spread
+    level = by_id(flat, "expected").spread
+
+    # The head still gets its boost — the slope effect is real.
+    assert uphill.head_ros_m_per_min > level.head_ros_m_per_min * 3
+
+    # But the fire must not also run *downhill* five times faster.
+    assert uphill.back_ros_m_per_min < level.back_ros_m_per_min
+
+    # And the footprint is a finger up the hill, not an inflated circle.
+    assert uphill.length_to_breadth > 3.0
+
+
+def test_a_steep_hill_in_still_air_does_not_produce_an_absurd_envelope():
+    """A ground-truth sanity bound.
+
+    The incident this was found on had a *measured* 18 ha burn scar and returned
+    a six-hour envelope of 267,000 ha — nearly three times the largest fire in
+    EU history, which took two weeks. Anything on that scale is a modelling
+    artefact, so it is pinned here rather than left to be rediscovered.
+    """
+    still_air = weather(wind_from_deg=0.0, wind_speed_kmh=2.0)
+    result = project(incident(), still_air, terrain=hillside(slope_pct=52.0, aspect_deg=0.0))
+
+    six_hours = max(result.horizons_minutes)
+    envelope_ha = result.envelope_areas_ha[six_hours]
+    assert envelope_ha < 60_000, f"six-hour envelope is {envelope_ha:,.0f} ha"
+
+
+def test_slope_converts_to_a_defensible_equivalent_wind():
+    """The conversion is exact, not fitted — wind reaches spread only through
+    ISI's exp(0.05039 * W) term — so it is worth stating what it implies."""
+    assert slope_equivalent_wind_kmh(0.0) == pytest.approx(0.0)
+    assert slope_equivalent_wind_kmh(52.0) == pytest.approx(32.0, abs=1.0)
+    # Van Wagner's factor saturates at a 60% grade, and so must this.
+    assert slope_equivalent_wind_kmh(100.0) == pytest.approx(slope_equivalent_wind_kmh(60.0))
+
+
+def test_in_light_wind_the_hill_decides_the_direction():
+    """Wind from the north would send the fire south. The hill rises east and
+    is worth far more than 2 km/h of air, so the fire goes east instead."""
+    still_air = weather(wind_from_deg=0.0, wind_speed_kmh=2.0)
+    result = project(incident(), still_air, terrain=hillside(slope_pct=40.0, aspect_deg=90.0))
+
+    assert by_id(result, "expected").spread.direction_deg == pytest.approx(90.0, abs=10.0)
+
+
+def test_in_strong_wind_the_wind_still_decides_the_direction():
+    """The converse, and the reason this is a vector sum rather than a rule:
+    the same hill barely deflects a fire the wind is already driving hard."""
+    gale = weather(wind_from_deg=0.0, wind_speed_kmh=60.0)
+    result = project(incident(), gale, terrain=hillside(slope_pct=40.0, aspect_deg=90.0))
+
+    direction = by_id(result, "expected").spread.direction_deg
+    assert 150.0 < direction < 180.0, "deflected toward the hill, but still heading south"
+
+
+def test_terrain_driven_climbs_when_the_wind_forecast_is_wrong():
+    """The scenario no longer forces the fire uphill by hand — the vector sum
+    does that on its own. What it now tests is the wind forecast being too
+    strong, which a 9 km grid cell says little about in a Greek valley.
     """
     result = project(
         incident(), weather(wind_from_deg=0.0), terrain=hillside(slope_pct=30.0, aspect_deg=90.0)
     )
 
-    assert by_id(result, "expected").spread.direction_deg == pytest.approx(180.0)
-    assert by_id(result, "terrain_driven").spread.direction_deg == pytest.approx(90.0)
+    expected = by_id(result, "expected").spread.direction_deg
+    climbing = by_id(result, "terrain_driven").spread.direction_deg
+
+    # Both are deflected from due south toward the hill in the east...
+    assert climbing < expected < 180.0
+    # ...and the terrain case, running on a fraction of the forecast wind,
+    # commits to the hill much more strongly.
+    assert climbing == pytest.approx(90.0, abs=20.0)
 
 
 def test_terrain_driven_falls_back_to_wind_on_flat_ground():
@@ -159,7 +247,7 @@ def test_terrain_driven_falls_back_to_wind_on_flat_ground():
     result = project(
         incident(), weather(wind_from_deg=0.0), terrain=hillside(slope_pct=1.0, aspect_deg=90.0)
     )
-    assert by_id(result, "terrain_driven").spread.direction_deg == pytest.approx(180.0)
+    assert by_id(result, "terrain_driven").spread.direction_deg == pytest.approx(180.0, abs=10.0)
 
 
 def test_caveats_say_whether_terrain_was_measured():

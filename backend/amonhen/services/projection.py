@@ -70,10 +70,6 @@ class Scenario:
     fuel: str | None
     wind_speed_factor: float = 1.0
     wind_direction_offset_deg: float = 0.0
-    #: When True the fire is assumed to follow the hill rather than the wind.
-    #: Real behaviour in light wind on steep ground, and it can send a fire in a
-    #: direction the forecast alone would never suggest.
-    terrain_driven: bool = False
     #: Multiplies the *measured* grade. Terrain is now observed, not guessed, so
     #: this only stresses how much we trust a 90 m DEM over broken ground.
     slope_factor: float = 1.0
@@ -115,10 +111,15 @@ SCENARIOS: tuple[Scenario, ...] = (
         "heavy_fuel", "Denser forest", "If it is really pine forest: slower front, far more heat.",
         "pine",
     ),
+    # This used to force the fire uphill by hand. It no longer needs to: slope
+    # is added to wind as a vector, so a fire on a steep hill in light air
+    # already climbs. What is still worth testing is the case where the *wind
+    # forecast is wrong* and the hill takes over — a 9 km grid cell says little
+    # about air moving through a Greek valley.
     Scenario(
         "terrain_driven", "Runs up the hill",
-        "In light wind a fire follows the slope instead. This one climbs.",
-        None, terrain_driven=True,
+        "If the wind is lighter than forecast, the slope takes over and the fire climbs.",
+        None, wind_speed_factor=0.15,
     ),
     Scenario(
         "worst_case", "Worst case",
@@ -290,33 +291,38 @@ def project(
     for scenario in SCENARIOS:
         scenario_wind = base_wind_speed * scenario.wind_speed_factor
 
-        # Direction first: a terrain-driven fire climbs the hill rather than
-        # running with the wind, which can point it somewhere the forecast never
-        # would. Everything downstream depends on getting this order right.
-        if scenario.terrain_driven and terrain is not None and terrain.slope_pct >= 5.0:
-            spread_bearing = terrain.aspect_deg
-            wind_direction_for_model = (terrain.aspect_deg + 180.0) % 360.0
-        else:
-            wind_direction_for_model = (
-                base_direction + scenario.wind_direction_offset_deg
-            ) % 360.0
-            spread_bearing = (wind_direction_for_model + 180.0) % 360.0
+        wind_direction_for_model = (
+            base_direction + scenario.wind_direction_offset_deg
+        ) % 360.0
 
-        # Slope is now *measured*, and only the component along the direction of
-        # travel counts: a 40% hill does nothing for a fire running across it.
+        # Slope goes in whole, as a grade and an uphill bearing, and the spread
+        # model resolves the two into one direction. This used to resolve the
+        # slope along a direction chosen *first*, from wind — which could not
+        # work, because on a steep hill in light wind the hill is what decides
+        # the direction. `estimate_spread` now adds the slope's equivalent wind
+        # to the real wind as a vector and reports where the sum points.
         if terrain is not None:
-            scenario_slope = terrain.slope_toward(spread_bearing) * scenario.slope_factor
+            scenario_slope = terrain.slope_pct * scenario.slope_factor
+            scenario_aspect: float | None = terrain.aspect_deg
         else:
-            scenario_slope = 0.0
+            scenario_slope, scenario_aspect = 0.0, None
 
         # ISI must be recomputed, not carried over. In the FBP system wind is an
         # *input to* ISI, and head rate of spread is a function of ISI alone —
         # so perturbing wind while reusing the original ISI changes only the
-        # ellipse's elongation. The first version did exactly that, which made
+        # ellipse's elongation. An early version did exactly that, which made
         # the "easing" scenario cover more ground than "gusting": lower wind gave
         # a rounder ellipse at an unchanged forward speed. Feeding wind through
         # ISI is what makes a windier scenario actually run faster.
-        if weather.ffmc is not None and scenario.wind_speed_factor != 1.0:
+        #
+        # It is recomputed unconditionally, not only when a scenario perturbs
+        # the wind. `weather.isi` is the daily FWI index, computed from *noon*
+        # weather; `weather.wind_speed_kmh` is the wind now. The two routinely
+        # disagree, and `estimate_spread` rescales ISI from the wind it is given
+        # — so pairing a noon ISI with the current wind quietly rescaled from
+        # the wrong baseline. Deriving both from FFMC and the same wind keeps
+        # them consistent by construction.
+        if weather.ffmc is not None:
             scenario_isi = initial_spread_index(weather.ffmc, scenario_wind)
         else:
             scenario_isi = weather.isi
@@ -340,6 +346,7 @@ def project(
             wind_speed_kmh=scenario_wind,
             fuel=scenario_fuel,
             slope_pct=scenario_slope,
+            slope_aspect_deg=scenario_aspect,
             live_moisture_factor=moisture_factor,
             live_moisture_pct=moisture_pct,
         )

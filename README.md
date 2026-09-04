@@ -30,7 +30,7 @@ using it. Add a free NASA key and the same screens become live.
 |---|---|
 | **Ingests** | NASA FIRMS active fire detections (VIIRS 375 m, MODIS 1 km) and Open-Meteo fire weather |
 | **Measures fuel** | Vegetation per fire from CORINE Land Cover, so a pine stand and a ploughed field no longer spread identically |
-| **Measures terrain** | Slope and aspect from the Copernicus DEM, so projections run over the real hillside instead of imaginary flat ground |
+| **Measures terrain** | Slope and aspect from the Copernicus DEM, added to the wind as a vector — so on a steep hill in light air the fire climbs, which is what fires do |
 | **Measures the burn** | Burned area and severity from Sentinel-2 dNBR at 20 m, replacing a 375 m pixel count that was explicitly a lower bound — validated at 9,910 ha against the 2024 Varnavas fire's reported ~10,000 ha |
 | **Measures dryness** | Live fuel moisture from Sentinel-2 NDMI, sampled in a ring *around* the fire so it reads the fuel ahead of the front rather than the scar behind it |
 | **Screens** | Flags heat detections that behave like factories or flares rather than fires — weak, night-only, never moving |
@@ -217,10 +217,12 @@ nobody would know to go looking.
 
 Stated plainly, because knowing where a tool stops is part of using it:
 
-- **Spread is a triage estimate, not a simulation.** Flat ground, uniform fuel,
-  steady wind. Real terrain routinely doubles uphill spread; spotting and crown
-  fire can outrun the model entirely. It is for ranking fifteen simultaneous
-  fires, not for planning a burn.
+- **Spread is a triage estimate, not a simulation.** Uniform fuel, steady wind,
+  and a fire assumed to hold its head rate for the full horizon — which real
+  runs, punctuated by terrain and wind shifts, do not. Spotting and crown fire
+  can outrun the model entirely. It is for ranking fifteen simultaneous fires,
+  not for planning a burn, and the six-hour envelope in particular should be
+  read as an outer bound rather than a forecast.
 - **Fuel models are borrowed.** Which model applies is now measured from CORINE,
   but the coefficients inside each one were still derived for Canadian boreal
   forest. The Mediterranean mappings in `services/spread.py` are the

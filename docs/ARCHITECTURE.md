@@ -217,7 +217,9 @@ when the honest statement is "under assumptions we are forced to make, probably
 somewhere in this arc". The three inputs we are least sure of are exactly the
 three that decide where a fire goes: **fuel** (one uniform type assumed for a
 whole country), **wind** (a 9 km forecast grid, and it veers), and **slope**
-(nothing supplies terrain, so every estimate is flat-ground).
+(nothing supplies terrain, so every estimate is flat-ground). All three have
+since become measured; what "uncertain" means for each has changed, but not
+that it is uncertain.
 
 So `services/projection.py` runs nine named scenarios across those uncertainties
 and reports the spread of outcomes:
@@ -255,15 +257,53 @@ Parnitha and Thessaloniki detections as a quarry and an industrial site.
 
 **Terrain is measured, not assumed.** An earlier version of the ensemble carried
 a scenario called "upslope" that applied a guessed 25% grade. That is now
-replaced by the real thing: every scenario uses the Copernicus DEM slope *in its
-own direction of travel*, and the scenario that remains — "runs up the hill" —
-tests something a guess cannot, namely that in light wind a fire follows the
-slope rather than the wind, and can therefore head somewhere the forecast never
-would. On Parnitha it points NNW while every wind-driven case points SSW.
+replaced by the real thing: every scenario uses the Copernicus DEM slope at the
+fire, and the scenario that remains — "runs up the hill" — tests something a
+guess cannot, namely that the 9 km wind forecast may be too strong for a Greek
+valley, in which case the slope takes over and the fire heads somewhere the
+forecast never would.
 
-Downslope gets no factor at all. FBP defines the slope term for upslope only,
-and rather than invent a downslope reduction we treat descending ground as flat
-— which over-predicts slightly, the safe direction to be wrong in.
+**Slope is a wind, not a multiplier.** This is the correction that matters most
+in this module, and it is worth stating why the obvious approach fails.
+
+The first implementation multiplied the head rate of spread by Van Wagner's
+slope factor. But the ellipse's elongation comes from wind alone: at 2 km/h the
+length-to-breadth ratio is 1.02, so the fire is a circle and the head, flank and
+back rates are all nearly equal. Multiplying "the head rate" by 5 for a 52%
+grade therefore multiplied *every* direction by 5 — including straight downhill.
+On a live incident whose measured burn scar was 18 ha, that produced a 40 km
+circle covering 125,000 ha, and a six-hour envelope of 267,000 ha. For scale,
+the largest fire in EU history burned 93,000 ha over two weeks.
+
+A hill rises one way. So slope is now handled the way the FBP System itself
+handles it: converted to the wind speed that would produce the same increase in
+spread, then **added to the real wind as a vector**. The conversion is exact
+rather than fitted — wind reaches rate of spread only through ISI, as
+`exp(0.05039 · W)` — so a slope factor SF is worth `ln(SF) / 0.05039` km/h. A
+52% grade comes out at 32 km/h, which is a claim about a hillside that a fire
+officer can argue with.
+
+| | before | after |
+|---|---|---|
+| head rate | 66.9 m/min | 69.2 m/min |
+| back rate | 45.3 m/min | **1.2 m/min** |
+| length : breadth | 1.02 | **3.83** |
+| direction | S (downwind) | **N (uphill)** |
+| 6 h envelope | 267,000 ha | **29,200 ha** |
+
+Three things follow, all of them right. The boost points somewhere instead of
+everywhere. It elongates the ellipse rather than inflating a circle, because it
+enters through the same term wind does. And in light wind on steep ground the
+resultant points uphill — which is what fires do, and which the model previously
+needed a hand-written special case to express.
+
+The special case for descending ground disappeared with it. There is no downhill
+branch any more: the slope vector always points uphill, and a fire being blown
+downhill simply has the two vectors partly cancel. That is the physics rather
+than a rule about it, and it can now legitimately point a fire *back up* a slope
+against a light breeze. The safety margin that the old "treat downhill as flat"
+rule provided lives where it belongs — in the `gusting` and `worst_case` members
+of the ensemble.
 
 **One correctness trap worth recording.** In the FBP system wind is an *input to*
 ISI, and head rate of spread is a function of ISI alone. The first implementation

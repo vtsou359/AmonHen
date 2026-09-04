@@ -57,10 +57,17 @@ class Terrain:
     source: str
 
     def slope_toward(self, bearing_deg: float) -> float:
-        """Grade in a given direction. Positive is uphill.
+        """Grade in a given direction. Positive is uphill, negative downhill.
 
-        This is the number the spread model actually wants: a 40% hill helps a
-        fire only to the extent the fire is heading up it.
+        The spread model no longer consumes this. It used to: slope was resolved
+        along a direction of travel decided in advance from wind. That could not
+        survive the discovery that on a steep hill in light air the *hill*
+        decides the direction, so `estimate_spread` now takes the full gradient
+        (`slope_pct` and `aspect_deg`) and resolves it itself.
+
+        Kept because it is the honest way to answer "how steep is it that way",
+        which is a real question for anyone reading a specific bearing off the
+        map — just not the one the model asks.
         """
         offset = math.radians(bearing_deg - self.aspect_deg)
         return self.slope_pct * math.cos(offset)
