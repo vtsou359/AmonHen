@@ -46,13 +46,19 @@ export const useUi = create<UiState>()((set) => ({
   selectedIncidentId: null,
   hoveredIncidentId: null,
   basemap: "dark",
+  // What the map opens with: the fires themselves, where they could go, the
+  // burnt area and the raw heat spots behind both. Everything else starts off,
+  // because a first screen that draws every layer at once is one nobody reads.
   layers: {
     // On by default: projecting where fires go is what this platform is for.
     projections: true,
     detections: true,
     perimeters: true,
     incidents: true,
-    exposure: true,
+    // Off by default. The dossier already ranks what is threatened, in words
+    // and in order, which is the form that supports a decision — the map
+    // markers mostly add clutter over the fires themselves.
+    exposure: false,
     places: false,
   },
   showNoise: false,
@@ -60,7 +66,11 @@ export const useUi = create<UiState>()((set) => ({
   // would eventually hide a real one that happened to look odd, and nobody
   // would know to go looking.
   hideSuspect: false,
-  projectionKind: "envelope",
+  // Opens on the core — the ground every one of the nine cases burns — rather
+  // than the envelope. The envelope is what you plan against and it is one
+  // click away, but it is also the largest shape on the screen, and opening on
+  // it makes every fire look like it is about to take a county.
+  projectionKind: "core",
   flyTo: null,
   // Overlays start off. Ten raster layers switched on at once is unreadable,
   // and each one is an upstream request the user did not ask for.
