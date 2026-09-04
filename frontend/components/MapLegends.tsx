@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { useOverlayCatalogue } from "@/lib/api";
 import { SEVERITY_HEX } from "@/lib/palette";
@@ -109,35 +109,11 @@ export function MapLegends() {
                   {Math.round((overlays[overlay.id]?.opacity ?? overlay.default_opacity) * 100)}%
                 </span>
               </div>
-              {/*
-                EFFIS serves legends as PNGs with a solid white background and
-                dark text. They are shown on a light card rather than filtered to
-                match the dark UI: inverting would shift every swatch, and a
-                legend whose colours do not match the map is worse than useless.
-              */}
-              {overlay.legend_url ? (
-              <div className="rounded-sm bg-white p-1.5">
-                {/*
-                  `max-w-full` without `w-full`, deliberately. EFFIS legends
-                  range from a 72px strip to a 367px class table: constraining
-                  only the maximum lets the small ones render pixel-crisp at
-                  natural size, while the oversized ones shrink to fit rather
-                  than truncating their labels — a legend reading "Broadleaved
-                  or mixed fores…" is not a legend. Forcing `w-full` instead
-                  upscaled the narrow legends into a blurry mess.
-                */}
-                <img
-                  src={overlay.legend_url}
-                  alt={`${overlay.title} legend`}
-                  className="mx-auto block h-auto max-w-full"
-                  loading="lazy"
-                />
-              </div>
-              ) : (
-                <p className="text-[9px] leading-relaxed text-ink-faint">
-                  {overlay.description}
-                </p>
-              )}
+              <OverlayLegend
+                url={overlay.legend_url}
+                title={overlay.title}
+                description={overlay.description}
+              />
             </div>
           ))}
 
@@ -149,5 +125,95 @@ export function MapLegends() {
         </div>
       )}
     </div>
+  );
+}
+
+
+/** How long to wait for a legend image before giving up on it. */
+const LEGEND_TIMEOUT_MS = 8000;
+
+/**
+ * One overlay's colour key, with the source's own image when it arrives.
+ *
+ * EFFIS is not uniformly reliable here, and it fails in two different ways.
+ * `fuel_map` ("What would burn") answers GetLegendGraphic with HTTP 200,
+ * content-type image/png and content-length 41173 — then sends no body. Some
+ * of the time the connection is cut and the browser paints a broken-image icon
+ * inside the legend card; the rest of the time it simply hangs, `complete`
+ * stays false and `onError` never fires at all.
+ *
+ * So both are handled. An error falls back immediately, and an image that has
+ * not arrived within a few seconds is treated as absent too — because a legend
+ * card that is permanently blank tells an operator less than the one sentence
+ * describing what the layer shows.
+ */
+function OverlayLegend({
+  url,
+  title,
+  description,
+}: {
+  url: string;
+  title: string;
+  description: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setLoaded(false);
+    if (!url) return;
+    // Once this fires the <img> is unmounted, so a very slow image cannot come
+    // back later — which is the intended trade. Eight seconds is already far
+    // longer than anyone will sit looking at an empty legend card.
+    const timer = setTimeout(() => setFailed(true), LEGEND_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [url]);
+
+  if (!url || failed) {
+    return (
+      <p className="text-[9px] leading-relaxed text-ink-faint">
+        {description}
+        {url && failed && (
+          <span className="text-ink-faint/70">
+            {" "}
+            (no colour key — the source did not return one)
+          </span>
+        )}
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {/*
+        EFFIS serves legends as PNGs with a solid white background and dark
+        text. They are shown on a light card rather than filtered to match the
+        dark UI: inverting would shift every swatch, and a legend whose colours
+        do not match the map is worse than useless.
+      */}
+      <div className="rounded-sm bg-white p-1.5">
+        {/*
+          `max-w-full` without `w-full`, deliberately. EFFIS legends range from
+          a 72px strip to a 367px class table: constraining only the maximum
+          lets the small ones render pixel-crisp at natural size, while the
+          oversized ones shrink to fit rather than truncating their labels — a
+          legend reading "Broadleaved or mixed fores…" is not a legend. Forcing
+          `w-full` instead upscaled the narrow legends into a blurry mess.
+        */}
+        <img
+          src={url}
+          alt={`${title} legend`}
+          className="mx-auto block h-auto max-w-full"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      </div>
+      {!loaded && (
+        <p className="mt-1 text-[9px] leading-relaxed text-ink-faint">
+          Loading colour key…
+        </p>
+      )}
+    </>
   );
 }
