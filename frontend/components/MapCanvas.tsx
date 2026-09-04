@@ -31,6 +31,39 @@ import { MapTooltip, type TooltipState } from "./MapTooltip";
 // map renders its controls and attribution but never draws a single tile.
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
+/**
+ * How many load failures, with nothing loading successfully in between, before
+ * the map admits to a problem.
+ *
+ * A single failure is routine and self-healing: MapLibre re-requests the tile,
+ * and neighbouring tiles usually cover the view meanwhile. Eight in a row is
+ * not a blip.
+ */
+const FAILURES_BEFORE_REPORTING = 8;
+
+/** How long to wait before retrying an overlay reconcile that did not take. */
+const OVERLAY_SYNC_RETRY_MS = 150;
+/** ~3 s of retries. Past that the style is not coming and polling is waste. */
+const OVERLAY_SYNC_MAX_ATTEMPTS = 20;
+/** How long to keep re-applying overlays across a basemap swap. */
+const OVERLAY_SETTLE_MS = 5000;
+const OVERLAY_SETTLE_INTERVAL_MS = 250;
+
+/** What the overlays *should* be, read live so a deferred reconcile is correct. */
+type OverlayRefs = {
+  catalogue: { current: Overlay[] | undefined };
+  state: { current: Record<string, { enabled: boolean; opacity: number }> };
+  time: { current: string };
+};
+
+/**
+ * How long a failure may stand unanswered before it is reported anyway.
+ *
+ * Covers the case a count cannot: a style that fails once and then simply never
+ * loads. Long enough that a single blip on a working map recovers first.
+ */
+const SILENCE_BEFORE_REPORTING_MS = 4000;
+
 export function MapCanvas() {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -53,6 +86,13 @@ export function MapCanvas() {
   catalogueRef.current = catalogue?.overlays;
   const timeRef = useRef<string>("");
   timeRef.current = catalogue?.time ?? "";
+  // Bundled once. The refs themselves are stable, so a handler registered at map
+  // creation still reads current values through this.
+  const overlayRefs = useRef<OverlayRefs>({
+    catalogue: catalogueRef,
+    state: overlayStateRef,
+    time: timeRef,
+  }).current;
 
   const detections = useLayer("detections", layers.detections);
   const perimeters = useLayer("perimeters", layers.perimeters);
@@ -97,16 +137,76 @@ export function MapCanvas() {
     // Safety net for style changes we did not initiate. The authoritative
     // re-add happens in the basemap effect below, on `idle`.
     instance.on("styledata", () => {
-      syncOverlays(instance, catalogueRef.current, overlayStateRef.current, timeRef.current);
+      syncOverlays(instance, overlayRefs);
     });
 
     // A basemap that fails silently is worse than one that fails loudly: the
     // operator sees an empty ocean and has no idea whether that means "no fires"
-    // or "no tiles". Surface it instead.
+    // or "no tiles". But the converse is a real cost too, and the first version
+    // of this handler paid it. MapLibre fires `error` once per failed *tile*,
+    // and a tile fails for reasons that fix themselves — a dropped connection, a
+    // CDN hiccup, a pan that outran the network. Treating each one as fatal put
+    // a red "Basemap failed to load" banner over a map that was working
+    // perfectly, and sent the operator off to check their network.
+    //
+    // What this does NOT do is try to classify the error. Three ways to tell a
+    // fatal failure from a tile blip were tried against the running app and all
+    // three are unreliable: `isStyleLoaded()` returns false *permanently* on a
+    // map that is rendering coastlines and labels; "has a frame been painted" is
+    // unobservable, because the deck.gl overlay draws to its own canvas and
+    // MapLibre emits no `render` after the first paint; and `sourceId` is
+    // declared only on source-data events, not on error events.
+    //
+    // Persistence is observable, so persistence is the test. One failure is
+    // noise. Failures that keep coming with no source loading in between are an
+    // outage, whatever caused them — which is the thing worth telling the
+    // operator, and the only thing they can act on.
+    let failures = 0;
+    let reported = false;
+    let verdictTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const recovered = () => {
+      failures = 0;
+      if (verdictTimer) {
+        clearTimeout(verdictTimer);
+        verdictTimer = null;
+      }
+      if (reported) {
+        reported = false;
+        setMapError(null);
+      }
+    };
+
+    const report = (message: string) => {
+      reported = true;
+      setMapError(message);
+    };
+
+    // Any source finishing its network requests is proof the map is being fed.
+    instance.on("sourcedata", (event) => {
+      if (event.isSourceLoaded) recovered();
+    });
+
     instance.on("error", (event) => {
+      const message = event.error?.message ?? "failed to load";
+      failures += 1;
       // eslint-disable-next-line no-console
-      console.error("[maplibre]", event.error?.message ?? event);
-      setMapError(event.error?.message ?? "Basemap failed to load");
+      console.warn(`[maplibre] load failure ${failures}:`, message);
+
+      if (failures >= FAILURES_BEFORE_REPORTING) {
+        report("tiles are not loading — check the network connection");
+        return;
+      }
+
+      // A style that never loads can fail exactly once and then sit there, so a
+      // count alone would let the worst case pass in silence. If nothing has
+      // loaded successfully a few seconds after the first failure, say so.
+      if (!verdictTimer) {
+        verdictTimer = setTimeout(() => {
+          verdictTimer = null;
+          if (failures > 0) report(message);
+        }, SILENCE_BEFORE_REPORTING_MS);
+      }
     });
 
     map.current = instance;
@@ -136,6 +236,7 @@ export function MapCanvas() {
 
     return () => {
       observer.disconnect();
+      if (verdictTimer) clearTimeout(verdictTimer);
       instance.remove();
       map.current = null;
       overlay.current = null;
@@ -152,17 +253,21 @@ export function MapCanvas() {
     instance.setStyle(basemap === "dark" ? DARK_STYLE_URL : SATELLITE_STYLE);
 
     // setStyle discards every source and layer we added, so the overlays have
-    // to be rebuilt. `styledata` is the obvious hook and the wrong one: it fires
-    // while the outgoing style is still partially in place, so `getLayer` finds
-    // the *old* overlay, the reconcile takes its "already present" branch, and
-    // the style swap then wipes the layer for good — the overlay silently
-    // disappears the first time you switch basemap.
+    // to be rebuilt. Both obvious hooks are wrong, for opposite reasons.
     //
-    // `idle` fires only once the new style is fully applied and its tiles are
-    // rendered, which is the first moment the map's layer list is truthful.
-    instance.once("idle", () => {
-      syncOverlays(instance, catalogueRef.current, overlayStateRef.current, timeRef.current);
-    });
+    // `styledata` fires while the outgoing style is still partially in place, so
+    // `getLayer` finds the *old* overlay, the reconcile takes its "already
+    // present" branch, and the swap then wipes the layer for good.
+    //
+    // `idle` was the fix for that and is worse: it **never fires on this map**.
+    // Measured across a basemap switch, zero `idle` events in twenty seconds —
+    // because, as the readiness comment above already records, the deck.gl
+    // overlay repaints continuously. So every basemap switch silently threw
+    // away whatever Copernicus layers the user had turned on.
+    //
+    // Reconciling repeatedly across the swap depends on no event at all. It
+    // costs a handful of no-op passes and is the only version measured to work.
+    settleOverlays(instance, overlayRefs);
   }, [basemap, ready]);
 
   // ---------------------------------------------------------------- fly-to
@@ -365,8 +470,10 @@ export function MapCanvas() {
   // Add, remove and re-opacity the Copernicus raster overlays.
   useEffect(() => {
     if (!map.current || !ready) return;
-    syncOverlays(map.current, catalogue?.overlays, overlays, catalogue?.time ?? "");
-  }, [catalogue, overlays, ready]);
+    syncOverlays(map.current, overlayRefs);
+    // `catalogue` and `overlays` are read through refs inside, but they must
+    // still be dependencies: they are what tells React to re-run this at all.
+  }, [catalogue, overlays, ready, overlayRefs]);
 
   return (
     <div className="relative h-full w-full">
@@ -413,36 +520,92 @@ const OVERLAY_PREFIX = "amonhen-overlay-";
  * style loads, and deck.gl draws above every MapLibre layer — so it is always
  * basemap → Copernicus overlays → fire data.
  */
-function syncOverlays(
-  map: MapLibreMap,
-  catalogue: Overlay[] | undefined,
-  state: Record<string, { enabled: boolean; opacity: number }>,
+/**
+ * Add, remove and re-opacity the Copernicus raster overlays.
+ *
+ * Reads the desired state from refs rather than taking it as values, because
+ * this can be *deferred* — see below — and a deferred call must act on what the
+ * user wants now, not on what they wanted when it was scheduled.
+ */
+/**
+ * Re-apply the overlays repeatedly for a few seconds.
+ *
+ * For use across a `setStyle`, which discards every source and layer we added
+ * and provides no reliable signal for when it has finished doing so. A single
+ * reconcile can land before the swap completes and be wiped; this keeps putting
+ * them back until the new style stops taking them away.
+ */
+function settleOverlays(map: MapLibreMap, want: OverlayRefs) {
+  const until = Date.now() + OVERLAY_SETTLE_MS;
+  const tick = () => {
+    try {
+      syncOverlays(map, want);
+    } catch {
+      return; // map removed
+    }
+    if (Date.now() < until) window.setTimeout(tick, OVERLAY_SETTLE_INTERVAL_MS);
+  };
+  tick();
+}
+
+function syncOverlays(map: MapLibreMap, want: OverlayRefs, attempt = 0) {
+  const catalogue = want.catalogue.current;
+  const state = want.state.current;
   // Supplied by the backend. EFFIS defaults time-aware layers to 2019 and
   // returns a blank tile without a date, so this is not optional.
-  time: string,
-) {
-  if (!catalogue || !map.isStyleLoaded()) return;
+  const time = want.time.current;
+  if (!catalogue) return;
+
+  let deferred = false;
 
   for (const overlay of catalogue) {
     const id = `${OVERLAY_PREFIX}${overlay.id}`;
     const wanted = state[overlay.id];
-    const present = Boolean(map.getLayer(id));
+    // Reconciled one layer at a time inside try/catch, so a style that really is
+    // mid-swap costs a retry rather than taking the whole set down with it.
+    try {
+      const present = Boolean(map.getLayer(id));
 
-    if (wanted?.enabled && !present) {
-      if (!map.getSource(id)) {
-        map.addSource(id, {
-          type: "raster",
-          tiles: [overlay.tile_url.replace("{time}", time)],
-          tileSize: 256,
-          attribution: overlay.attribution,
-        });
+      if (wanted?.enabled && !present) {
+        if (!map.getSource(id)) {
+          map.addSource(id, {
+            type: "raster",
+            tiles: [overlay.tile_url.replace("{time}", time)],
+            tileSize: 256,
+            attribution: overlay.attribution,
+          });
+        }
+        map.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": wanted.opacity } });
+      } else if (!wanted?.enabled && present) {
+        map.removeLayer(id);
+        if (map.getSource(id)) map.removeSource(id);
+      } else if (wanted?.enabled && present) {
+        map.setPaintProperty(id, "raster-opacity", wanted.opacity);
       }
-      map.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": wanted.opacity } });
-    } else if (!wanted?.enabled && present) {
-      map.removeLayer(id);
-      if (map.getSource(id)) map.removeSource(id);
-    } else if (wanted?.enabled && present) {
-      map.setPaintProperty(id, "raster-opacity", wanted.opacity);
+    } catch {
+      deferred = true;
     }
   }
+
+  // Retry only what actually failed, and only for a bounded time.
+  //
+  // This used to be guarded up front by `!map.isStyleLoaded()`, which silently
+  // broke the entire overlay feature: ticking a layer updated the checkbox and
+  // the legend, this returned early, and no tile was ever added — with nothing
+  // to retry it. The flag is not the precondition it looks like. Measured
+  // against this running map it reads false for minutes at a time while
+  // `addSource` and `addLayer` both succeed, so asking MapLibre to do the work
+  // and handling the rare refusal is the honest test. (`once("idle")` is not an
+  // option for the retry either: as the readiness comment above records, the
+  // deck.gl overlay repaints continuously and this map may never go idle.)
+  if (deferred && attempt < OVERLAY_SYNC_MAX_ATTEMPTS) {
+    window.setTimeout(() => {
+      try {
+        syncOverlays(map, want, attempt + 1);
+      } catch {
+        // The map was removed while we waited. Nothing to reconcile.
+      }
+    }, OVERLAY_SYNC_RETRY_MS);
+  }
 }
+
