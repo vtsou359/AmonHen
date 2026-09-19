@@ -66,6 +66,35 @@ Environment variables:
 Satellite imagery is a **build argument**, not an environment variable: pass
 `INSTALL_EO=true` in your platform's build-args field. It adds 165 MB.
 
+### Deploying to Fly.io
+
+[`fly.toml`](../fly.toml) in the repo root carries all of the above. Fly keeps the
+build context at the repo root even though the Dockerfile is in `backend/`, which
+is what lets the image pick up `data/`.
+
+```bash
+fly auth login
+fly apps create amon-hen-api            # app names are global; pick a free one,
+                                        # then set it as `app` in fly.toml
+fly secrets set AMONHEN_FIRMS_MAP_KEY=your-key-here
+fly deploy
+```
+
+`fly deploy` prints the hostname — `https://amon-hen-api.fly.dev` — which is what
+the frontend needs in the next section. Check it before wiring anything up:
+
+```bash
+curl https://amon-hen-api.fly.dev/api/v1/system/status
+```
+
+`boundary_filter_active` must be `true` and `nasa_firms` should read `"live"`.
+
+Other hosts work the same way — Render, Railway and Cloud Run all take a
+Dockerfile path plus a build context, and need the same environment variables.
+The thing to check on any of them is the idle behaviour: free tiers usually sleep
+after a few minutes, which stops the scheduler and makes the first request after
+an idle period slow.
+
 ### Run exactly one instance
 
 The scheduler and the in-memory picture both assume a single long-lived process.
