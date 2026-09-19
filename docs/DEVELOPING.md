@@ -32,6 +32,10 @@ Every module has one explaining what it is for and, more usefully, what it is
 
 ## Running it
 
+Step-by-step setup for macOS, Windows and Linux — installing Docker, changing
+ports, adding keys, and what to do when something fails — is in
+[RUNNING.md](RUNNING.md). The short version:
+
 ```bash
 make up          # start everything: UI on :3000, API on :8000/docs
 make status      # service health, and which feeds are live vs fixtures

@@ -90,6 +90,12 @@ class DataSource(ABC, Generic[T]):
     def __init__(self) -> None:
         self._cache = JsonCache(self.name, self.cache_ttl_seconds)
         self.cache_dir = self._cache.directory
+        #: Why the most recent live fetch fell back to the fixture, or None if it
+        #: did not. Being configured for live data is not the same as serving it:
+        #: a rejected key or an unreachable upstream quietly hands back the
+        #: bundled sample, and before this was tracked the status endpoint went on
+        #: reporting "live" over demo fires.
+        self._fallback_reason: str | None = None
 
     # ---------------------------------------------------------------- public
 
@@ -105,9 +111,11 @@ class DataSource(ABC, Generic[T]):
         if self.is_live:
             try:
                 records = await self._fetch_live(**kwargs)
+                self._fallback_reason = None
                 log.info("source.fetched", source=self.name, count=len(records), mode="live")
                 return records
             except Exception as exc:  # noqa: BLE001 — deliberate catch-all, see rule 1
+                self._fallback_reason = self._describe_failure(exc)
                 log.warning(
                     "source.live_failed", source=self.name, error=str(exc), falling_back=True
                 )
@@ -117,17 +125,47 @@ class DataSource(ABC, Generic[T]):
 
     @property
     def is_live(self) -> bool:
+        """Whether this source is *configured* to fetch live data.
+
+        Not whether it is succeeding — `status()` reports that.
+        """
         return not self.requires_credentials or self._has_credentials()
 
     def status(self) -> dict[str, Any]:
-        """Reported at /api/v1/system/sources so the UI can show feed health."""
-        return {
+        """Reported at /api/v1/system/status so the UI can show feed health.
+
+        `mode` is what the source is actually serving, not what it is configured
+        for. A source whose key is rejected is on its fixture and says so, with
+        the reason in `note` — measured with an invalid FIRMS key, which gets an
+        HTTP 400 and used to be reported "live" while the map showed demo fires.
+        """
+        serving_live = self.is_live and self._fallback_reason is None
+        state: dict[str, Any] = {
             "name": self.name,
-            "mode": "live" if self.is_live else "fixture",
+            "mode": "live" if serving_live else "fixture",
             "attribution": self.attribution,
             "homepage": self.homepage,
             "requires_credentials": self.requires_credentials,
         }
+        if self.is_live and self._fallback_reason:
+            state["note"] = (
+                f"Last live request failed ({self._fallback_reason}). "
+                "Using the built-in fallback until it succeeds."
+            )
+        return state
+
+    @staticmethod
+    def _describe_failure(exc: Exception) -> str:
+        """A reason for a failed live fetch that is safe to put on screen.
+
+        Never `str(exc)`. FIRMS carries the API key in the URL path and httpx
+        quotes the URL in every error, so the raw message would print the
+        operator's key into the status endpoint and the banner. The status code,
+        or the exception type, says what went wrong without it.
+        """
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"HTTP {exc.response.status_code}"
+        return type(exc).__name__
 
     # ------------------------------------------------------------- subclass
     #

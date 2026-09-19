@@ -258,9 +258,13 @@ class Sentinel2Source(DataSource[Scene]):
     def status(self) -> dict[str, Any]:
         state = super().status()
         if not EO_AVAILABLE:
+            # Docker is the documented way to run this, and a `uv pip install`
+            # inside a container is lost at the next rebuild, so lead with the
+            # instruction that survives one.
             state["note"] = (
-                'Raster support not installed. Run: uv pip install -e ".[eo]" '
-                "to enable burned-area mapping and live fuel moisture."
+                "Raster support not installed. Set AMONHEN_INSTALL_EO=true in .env and run "
+                "`docker compose up -d --build` (or, outside Docker, "
+                'uv pip install -e ".[eo]") to enable burned-area mapping and live fuel moisture.'
             )
         return state
 

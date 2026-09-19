@@ -1,6 +1,6 @@
 """System status and self-description.
 
-The `/sources` endpoint exists so the UI can be honest about what it is showing.
+The `/status` endpoint exists so the UI can be honest about what it is showing.
 A platform that silently serves demo data looks identical to one serving live
 satellite data, and that is precisely the confusion that gets someone hurt. The
 banner in the frontend is driven from here.

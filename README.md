@@ -22,6 +22,9 @@ Then open **http://localhost:3000**. No API keys, no accounts, no setup — the
 platform ships with a realistic demo dataset and tells you plainly that it is
 using it. Add a free NASA key and the same screens become live.
 
+New to Docker, or on Windows? **[docs/RUNNING.md](docs/RUNNING.md)** walks through
+it step by step on macOS, Windows and Linux.
+
 ---
 
 ## What it does today
@@ -105,7 +108,8 @@ Everything works without this. To upgrade from demo data to live satellites:
 
 1. Get a free FIRMS key (issued instantly): https://firms.modaps.eosdis.nasa.gov/api/map_key/
 2. `cp .env.example .env` and set `AMONHEN_FIRMS_MAP_KEY=...`
-3. `docker compose restart api`
+3. `docker compose up -d` — not `restart`, which keeps the container's old
+   settings and silently ignores the new key
 
 The amber banner across the top disappears when every feed is live. Weather is
 already live out of the box — Open-Meteo needs no key, which is exactly why it
@@ -125,6 +129,10 @@ That rebuilds the API image with the `[eo]` extra (165 MB, a couple of minutes)
 and restarts it. Everything else works without it; fires simply report "estimated"
 area and say why there is no measurement. `make status` shows a note against the
 `sentinel2` source when it is not installed.
+
+On Windows, where `make` is not available — or to keep imagery switched on
+through later rebuilds — set `AMONHEN_INSTALL_EO=true` in `.env` and run
+`docker compose up -d --build` instead.
 
 ## Layout
 

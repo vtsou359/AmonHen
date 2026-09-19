@@ -22,7 +22,16 @@ import { DangerChip, SeverityChip, StatusDot } from "./Badges";
 
 type SortKey = "severity" | "area" | "growth" | "recency";
 
-export function IncidentList({ incidents }: { incidents: IncidentSummary[] }) {
+export function IncidentList({
+  incidents: fromPicture,
+  unreachable = false,
+}: {
+  /** Undefined until the first picture arrives — which is not the same as empty. */
+  incidents: IncidentSummary[] | undefined;
+  /** The picture request has failed and there is no earlier picture to show. */
+  unreachable?: boolean;
+}) {
+  const incidents = useMemo(() => fromPicture ?? [], [fromPicture]);
   const { selectedIncidentId, select, requestFlyTo, hideSuspect, toggleHideSuspect } = useUi();
   const [sort, setSort] = useState<SortKey>("severity");
   const [query, setQuery] = useState("");
@@ -68,6 +77,20 @@ export function IncidentList({ incidents }: { incidents: IncidentSummary[] }) {
   const suspectCount = incidents.filter(
     (i) => i.verdict === "likely_not_wildfire" || i.verdict === "questionable",
   ).length;
+
+  // "No active incidents" is a claim about the world, so it is only made once a
+  // picture has actually arrived. Until then the list does not know whether
+  // there are fires — the first build takes about 40 s with satellite imagery
+  // on, and forever if the API is unreachable — and it used to fill that time
+  // by reporting an all-clear.
+  const emptyMessage =
+    fromPicture === undefined
+      ? unreachable
+        ? "No fire data: the API cannot be reached."
+        : "Loading the current picture…"
+      : query
+        ? "No incident matches that name."
+        : "No active incidents in the area of interest.";
 
   function open(incident: IncidentSummary) {
     select(incident.id);
@@ -125,11 +148,7 @@ export function IncidentList({ incidents }: { incidents: IncidentSummary[] }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {rows.length === 0 && (
-          <p className="p-4 text-xs text-ink-faint">
-            {query ? "No incident matches that name." : "No active incidents in the area of interest."}
-          </p>
-        )}
+        {rows.length === 0 && <p className="p-4 text-xs text-ink-faint">{emptyMessage}</p>}
 
         {rows.map((incident) => (
           <button

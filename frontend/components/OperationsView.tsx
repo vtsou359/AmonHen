@@ -9,7 +9,7 @@
  * no matter how many panels want it.
  */
 import dynamic from "next/dynamic";
-import { usePicture } from "@/lib/api";
+import { API_BASE, usePicture } from "@/lib/api";
 import { IncidentDossier } from "./IncidentDossier";
 import { IncidentList } from "./IncidentList";
 import { LayerControl } from "./LayerControl";
@@ -35,14 +35,19 @@ export function OperationsView() {
 
         {error && (
           <div className="border-b border-severity-critical/30 bg-severity-critical/10 px-4 py-2 text-2xs text-severity-critical">
-            Cannot reach the Amon Hen API ({String(error.message)}). Is the backend running on{" "}
-            <code className="font-mono">:8000</code>?
+            {/* The address comes from the build, not a literal: after a port
+                change (docs/RUNNING.md) a hard-coded ":8000" pointed at the wrong
+                place. */}
+            Cannot reach the Amon Hen API ({String(error.message)}). Is the backend running at{" "}
+            <code className="font-mono">{API_BASE}</code>?
           </div>
         )}
 
         <div className="flex min-h-0 flex-1">
           <section className="w-[300px] shrink-0 border-r border-edge bg-surface-panel">
-            <IncidentList incidents={data?.incidents ?? []} />
+            {/* Passed through as-is, not `?? []`: "no picture yet" and "no fires"
+                are different answers, and the list says which. */}
+            <IncidentList incidents={data?.incidents} unreachable={Boolean(error) && !data} />
           </section>
 
           <main className="relative min-w-0 flex-1">
