@@ -109,10 +109,20 @@ picture is rebuilt on demand whenever it is older than ten minutes.
 ### Before you expose it
 
 `POST /api/v1/incidents/refresh` is unauthenticated, forces a full rebuild and
-deliberately bypasses every cache. That is why `docker-compose.yml` binds the API
-to loopback rather than to every interface. On the public internet, anyone who
-finds it can press it repeatedly and spend your NASA quota. Put the backend
-behind your platform's access control, or choose to accept that knowingly.
+deliberately bypasses every cache — which is why `docker-compose.yml` binds the
+API to loopback rather than to every interface.
+
+It cannot be protected with a key, because the Refresh button calls it from the
+browser and anything the browser holds is public. Instead it is **rate-limited**:
+one forced refresh per `AMONHEN_REFRESH_MIN_INTERVAL_SECONDS` (default 60),
+with HTTP 429 and a `Retry-After` header for the rest, so the worst a visitor can
+do is one fetch cycle a minute. The scheduled 15-minute ingest is never
+throttled, and the interface turns the 429 into "Refreshed moments ago — try
+again shortly."
+
+Set it to `0` to switch the limit off, or raise it if your NASA quota is tight.
+If you need the endpoint properly closed, put the whole backend behind your
+platform's access control.
 
 ---
 

@@ -9,6 +9,7 @@ different things about whether waiting will help.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -17,7 +18,9 @@ from amonhen.domain.entities import Detection, Incident
 from amonhen.services.burn_scar import BurnScar
 from amonhen.services.operations import (
     DEFAULT_DAY_RANGE,
+    OperationalPicture,
     OperationsService,
+    RefreshTooSoon,
     _apply_measured_area,
 )
 from amonhen.services.validation import Plausibility
@@ -210,3 +213,108 @@ def test_the_day_range_stays_inside_what_firms_accepts():
     the plain text "Invalid day range" under an HTTP 200 — which the connector
     reads as an empty product, silently losing every detection."""
     assert 1 <= DEFAULT_DAY_RANGE <= 5
+
+
+# --------------------------------------------------------------------------
+# The Refresh button is a lever anyone on the internet can pull
+# --------------------------------------------------------------------------
+
+
+def empty_picture() -> OperationalPicture:
+    return OperationalPicture(generated_at=datetime.now(UTC))
+
+
+async def stub_rebuild(**_) -> OperationalPicture:
+    """Stands in for the real chain, which would go to NASA."""
+    return empty_picture()
+
+
+def test_the_first_forced_refresh_is_allowed():
+    assert OperationsService().seconds_until_refresh_allowed() == 0.0
+
+
+async def test_a_second_forced_refresh_is_refused_and_says_how_long_to_wait(monkeypatch):
+    """Each forced refresh bypasses every source cache, so it costs a full round
+    of upstream requests against the operator's NASA key."""
+    service = OperationsService()
+    monkeypatch.setattr(service, "rebuild", stub_rebuild)
+
+    await service.force_refresh()
+
+    with pytest.raises(RefreshTooSoon) as caught:
+        await service.force_refresh()
+    assert 0 < caught.value.retry_after_seconds <= 60
+
+
+async def test_the_cooldown_starts_before_the_rebuild_not_after(monkeypatch):
+    """A rebuild takes seconds to tens of seconds. Stamping the time afterwards
+    would let everything that arrives meanwhile through at once — which is the
+    stampede the limit exists to stop, not a detail of where a line goes."""
+    service = OperationsService()
+    rebuilds = 0
+
+    async def slow_rebuild(**_) -> OperationalPicture:
+        nonlocal rebuilds
+        rebuilds += 1
+        await asyncio.sleep(0.05)
+        return empty_picture()
+
+    monkeypatch.setattr(service, "rebuild", slow_rebuild)
+
+    outcomes = await asyncio.gather(
+        service.force_refresh(), service.force_refresh(), return_exceptions=True
+    )
+
+    assert rebuilds == 1, "the second request started a second rebuild"
+    assert sum(isinstance(o, RefreshTooSoon) for o in outcomes) == 1
+
+
+async def test_the_limit_can_be_turned_off(monkeypatch):
+    """Zero means no cooldown — for an operator running this on their own
+    machine, where the only person pressing the button is them."""
+    from amonhen.core.config import settings
+
+    monkeypatch.setattr(settings, "refresh_min_interval_seconds", 0)
+    service = OperationsService()
+    monkeypatch.setattr(service, "rebuild", stub_rebuild)
+
+    await service.force_refresh()
+    await service.force_refresh()  # must not raise
+
+
+async def test_the_scheduled_rebuild_is_never_throttled(monkeypatch):
+    """The limit protects the quota from visitors, not from our own ingest. If
+    the 15-minute cycle went through the cooldown, a visitor pressing Refresh
+    could stop the platform ingesting."""
+    from amonhen.ingest import scheduler
+    from amonhen.services.operations import operations
+
+    monkeypatch.setattr(operations, "_picture", None)
+    monkeypatch.setattr(operations, "_last_forced_refresh", None)
+    monkeypatch.setattr(operations, "rebuild", stub_rebuild)
+
+    await scheduler.refresh_picture()
+    await scheduler.refresh_picture()
+
+    assert operations.seconds_until_refresh_allowed() == 0.0
+
+
+async def test_the_endpoint_answers_429_with_a_retry_after_header(monkeypatch):
+    """What a client actually sees. 429 and Retry-After are the standard way to
+    say "later"; the interface turns them into one plain sentence."""
+    from fastapi import HTTPException
+
+    from amonhen.api.routes.incidents import refresh
+    from amonhen.services.operations import operations
+
+    monkeypatch.setattr(operations, "_picture", None)
+    monkeypatch.setattr(operations, "_last_forced_refresh", None)
+    monkeypatch.setattr(operations, "rebuild", stub_rebuild)
+
+    first = await refresh(day_range=DEFAULT_DAY_RANGE)
+    assert first.total_incidents == 0
+
+    with pytest.raises(HTTPException) as caught:
+        await refresh(day_range=DEFAULT_DAY_RANGE)
+    assert caught.value.status_code == 429
+    assert int(caught.value.headers["Retry-After"]) >= 1

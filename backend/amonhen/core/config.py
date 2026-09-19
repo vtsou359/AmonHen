@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------- ingest
     ingest_enabled: bool = True
     firms_poll_minutes: int = 15
+    #: Minimum gap between *forced* refreshes — the Refresh button, which
+    #: deliberately bypasses every source cache and so costs a full round of
+    #: upstream requests against the operator's NASA key. Harmless on a laptop;
+    #: on a public deployment it is a lever any visitor can pull. Does not apply
+    #: to the scheduled rebuild, which is never throttled.
+    refresh_min_interval_seconds: int = 60
     weather_poll_minutes: int = 60
     detection_retention_days: int = 90
 

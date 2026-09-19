@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { forceRefresh } from "@/lib/api";
+import { ApiError, forceRefresh } from "@/lib/api";
 import { formatArea, formatRelative } from "@/lib/format";
 import type { PictureResponse } from "@/lib/types";
 import { Logo } from "./Logo";
@@ -23,12 +23,33 @@ export function TopBar({
   onRefreshed: () => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  // The note is about something that has just happened and stops being true
+  // shortly afterwards — the cooldown is a minute — so it clears itself rather
+  // than sitting in the masthead asserting a stale fact.
+  useEffect(() => {
+    if (!note) return;
+    const timer = setTimeout(() => setNote(null), 8000);
+    return () => clearTimeout(timer);
+  }, [note]);
 
   async function refresh() {
     setRefreshing(true);
+    setNote(null);
     try {
       await forceRefresh();
       onRefreshed();
+    } catch (error) {
+      // Previously this threw into the void: the spinner stopped and nothing
+      // else changed, so a refused refresh looked exactly like a successful one.
+      // A forced refresh bypasses every cache and spends NASA quota, so the
+      // backend allows one a minute and answers 429 to the rest.
+      setNote(
+        error instanceof ApiError && error.status === 429
+          ? "Refreshed moments ago — try again shortly."
+          : "Refresh failed.",
+      );
     } finally {
       setRefreshing(false);
     }
@@ -76,26 +97,34 @@ export function TopBar({
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={refresh}
-        disabled={refreshing}
-        className="ml-auto flex items-center gap-1.5 rounded-sm border border-edge px-2.5 py-1 text-2xs text-ink-muted transition-colors hover:border-edge-strong hover:text-ink disabled:opacity-50"
-      >
-        <svg
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          className={refreshing ? "animate-spin" : undefined}
+      <div className="ml-auto flex items-center gap-2.5">
+        {note && (
+          <span role="status" className="text-2xs text-ink-faint">
+            {note}
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 rounded-sm border border-edge px-2.5 py-1 text-2xs text-ink-muted transition-colors hover:border-edge-strong hover:text-ink disabled:opacity-50"
         >
-          <path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" />
-        </svg>
-        {refreshing ? "Rebuilding" : "Refresh"}
-      </button>
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            className={refreshing ? "animate-spin" : undefined}
+          >
+            <path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" />
+          </svg>
+          {refreshing ? "Rebuilding" : "Refresh"}
+        </button>
+      </div>
     </header>
   );
 }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import ceil
+
 from fastapi import APIRouter, HTTPException, Query
 
 from amonhen.api.schemas import (
@@ -21,7 +23,12 @@ from amonhen.api.schemas import (
     ThreatSummary,
 )
 from amonhen.services.burn_scar import BurnScar, BurnScarUnavailable
-from amonhen.services.operations import DEFAULT_DAY_RANGE, IncidentView, operations
+from amonhen.services.operations import (
+    DEFAULT_DAY_RANGE,
+    IncidentView,
+    RefreshTooSoon,
+    operations,
+)
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -228,9 +235,20 @@ async def refresh(
     "Invalid day range. Expects [1..5]." with an HTTP 200, which the connector
     catches and treats as an empty product; the net effect was a silent loss of
     every detection rather than an error.
+
+    Rate-limited, answering HTTP 429 with `Retry-After` when asked again too
+    soon: bypassing the caches costs a full round of upstream requests against
+    the operator's NASA key, and a deployed instance is reachable by anyone.
     """
-    picture = await operations.rebuild(day_range=day_range, force=True)
-    operations._picture = picture  # noqa: SLF001 — deliberate cache priming
+    try:
+        picture = await operations.force_refresh(day_range=day_range)
+    except RefreshTooSoon as exc:
+        retry_after = ceil(exc.retry_after_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail=f"A refresh ran moments ago. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
     return PictureResponse(
         generated_at=picture.generated_at,
         area_of_interest=picture.area_of_interest,

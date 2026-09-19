@@ -125,6 +125,14 @@ class OperationalPicture:
         return round(sum(v.incident.estimated_area_ha for v in self.incidents), 1)
 
 
+class RefreshTooSoon(RuntimeError):
+    """A forced refresh was asked for while the last one was still cooling down."""
+
+    def __init__(self, retry_after_seconds: float) -> None:
+        super().__init__(f"Forced refresh available again in {retry_after_seconds:.0f}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
 class OperationsService:
     """Builds and caches the operational picture."""
 
@@ -140,6 +148,8 @@ class OperationsService:
         self.fuel_moisture = FuelMoistureService(self.imagery)
         self._picture: OperationalPicture | None = None
         self._lock = asyncio.Lock()
+        #: When a forced refresh last started. See `force_refresh`.
+        self._last_forced_refresh: datetime | None = None
 
     # ---------------------------------------------------------------- public
 
@@ -157,6 +167,38 @@ class OperationsService:
                     return self._picture
             self._picture = await self.rebuild()
             return self._picture
+
+    def seconds_until_refresh_allowed(self) -> float:
+        """How long a forced refresh must wait, or 0.0 if one may run now."""
+        if self._last_forced_refresh is None:
+            return 0.0
+        elapsed = (datetime.now(UTC) - self._last_forced_refresh).total_seconds()
+        return max(0.0, settings.refresh_min_interval_seconds - elapsed)
+
+    async def force_refresh(self, day_range: int = DEFAULT_DAY_RANGE) -> OperationalPicture:
+        """Rebuild now, bypassing every cache — at most once per interval.
+
+        This is the one operation that spends the operator's NASA quota on
+        demand, and the button that triggers it is reachable by anyone who can
+        reach the deployment — which is why docker-compose binds the API to
+        loopback. The cooldown bounds the damage to one fetch cycle per
+        `refresh_min_interval_seconds` instead of taking the button away.
+
+        The timestamp is recorded *before* the rebuild rather than after. A
+        rebuild takes seconds to tens of seconds, and stamping it afterwards
+        would let every request arriving meanwhile through the check at once —
+        precisely the stampede this exists to prevent.
+
+        The scheduled rebuild calls `rebuild()` directly and is never throttled:
+        the limit protects the quota from visitors, not from our own ingest.
+        """
+        wait = self.seconds_until_refresh_allowed()
+        if wait > 0:
+            raise RefreshTooSoon(wait)
+        self._last_forced_refresh = datetime.now(UTC)
+        picture = await self.rebuild(day_range=day_range, force=True)
+        self._picture = picture
+        return picture
 
     async def rebuild(
         self, day_range: int = DEFAULT_DAY_RANGE, force: bool = False

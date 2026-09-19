@@ -74,7 +74,13 @@ export function useSystemStatus() {
 
 export async function forceRefresh(): Promise<PictureResponse> {
   const response = await fetch(`${API_BASE}/incidents/refresh`, { method: "POST" });
-  if (!response.ok) throw new Error("Refresh failed");
+  // An ApiError, not a bare Error: the backend rate-limits forced refreshes and
+  // answers 429, which the button has to be able to tell apart from a genuine
+  // failure. Deliberately not read from the body — the wording belongs in the
+  // interface, next to every other phrase an operator reads.
+  if (!response.ok) {
+    throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+  }
   return response.json();
 }
 
