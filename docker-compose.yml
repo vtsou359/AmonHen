@@ -3,7 +3,10 @@ name: amonhen
 services:
   api:
     build:
-      context: ./backend
+      # The repo root, not ./backend, so the image can carry data/ —
+      # a deployed container has no bind mount to supply it.
+      context: .
+      dockerfile: backend/Dockerfile
       args:
         # Set AMONHEN_INSTALL_EO=true in .env to bake in the Sentinel-2 raster
         # stack, which turns on burned-area mapping and live fuel moisture.

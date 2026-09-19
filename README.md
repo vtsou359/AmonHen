@@ -25,6 +25,9 @@ using it. Add a free NASA key and the same screens become live.
 New to Docker, or on Windows? **[docs/RUNNING.md](docs/RUNNING.md)** walks through
 it step by step on macOS, Windows and Linux.
 
+Putting it online is **[docs/DEPLOYING.md](docs/DEPLOYING.md)**: the interface on
+Vercel, the backend as a container.
+
 ---
 
 ## What it does today

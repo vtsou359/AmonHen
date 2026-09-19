@@ -43,7 +43,7 @@ ARG INSTALL_EO=false
 #
 # Installed straight from pyproject.toml rather than a hand-written list, so
 # adding a dependency in one place cannot silently leave the image behind.
-COPY pyproject.toml ./
+COPY backend/pyproject.toml ./
 # Install with uv, then remove pip entirely.
 #
 # pip is never invoked in this image — uv does the installing at build time and
@@ -63,12 +63,23 @@ RUN uv pip install --system --no-cache -r pyproject.toml \
            /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
            /usr/local/bin/pip /usr/local/bin/pip3*
 
-COPY amonhen ./amonhen
-COPY scripts ./scripts
+COPY backend/amonhen ./amonhen
+COPY backend/scripts ./scripts
+
+# The Greece polygon and the demo fixtures are baked in, not mounted.
+# docker-compose mounts ./data over /data for local work, but a container running
+# on a hosting platform has no such mount — and without data/boundaries the
+# boundary filter silently switches off, which in live data admitted ~92% foreign
+# fires, while without data/fixtures a keyless deployment shows nothing at all.
+COPY data /data
+ENV AMONHEN_DATA_DIR=/data
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/system/health',timeout=2).status==200 else 1)"
+  CMD python -c "import os,urllib.request,sys; p=os.environ.get('PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://localhost:{p}/api/v1/system/health',timeout=2).status==200 else 1)"
 
-CMD ["uvicorn", "amonhen.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Hosting platforms (Render, Railway, Cloud Run) hand the port to the container
+# in $PORT and expect it to be listened on; 8000 is the local default. `exec` so
+# uvicorn is PID 1 and receives the platform's SIGTERM directly.
+CMD ["sh", "-c", "exec uvicorn amonhen.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
