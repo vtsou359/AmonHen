@@ -1,0 +1,22 @@
+# The build context is the repo root (see docker-compose.yml), so everything the
+# image does not need is excluded here — otherwise every build ships the frontend's
+# node_modules and the local venv to the Docker daemon.
+.git
+.idea
+.claude
+.venv
+backend/.venv
+backend/tests
+backend/.pytest_cache
+backend/.ruff_cache
+frontend
+docs
+infra
+Logos
+**/__pycache__
+**/*.pyc
+.DS_Store
+.env
+
+# Fixtures and the boundary polygon are needed in the image; the HTTP cache is not.
+data/cache
