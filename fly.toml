@@ -1,0 +1,45 @@
+# Fly.io deployment for the Amon Hen backend.
+#
+# Fly keeps the Docker build context at the directory holding this file — the
+# repo root — even though the Dockerfile lives in backend/. That is exactly what
+# this image needs, because it has to copy data/ (the Greece polygon and the
+# demo fixtures) which sits outside backend/.
+#
+#   fly apps create amon-hen-api                 # names are global; pick a free one
+#   fly secrets set AMONHEN_FIRMS_MAP_KEY=...    # live fires; skip it for the demo
+#   fly deploy
+#
+app = "amon-hen-api"
+primary_region = "fra"   # Frankfurt: Fly's closest region to Greece
+
+[build]
+  dockerfile = "backend/Dockerfile"
+  # Sentinel-2 burned-area mapping and live fuel moisture. Adds 165 MB, and needs
+  # the 1 GB machine below rather than 512 MB.
+  # [build.args]
+  #   INSTALL_EO = "true"
+
+[http_service]
+  internal_port = 8000          # what the container listens on when $PORT is unset
+  force_https = true
+  # One machine, always on. The scheduler polls FIRMS every 15 minutes and the
+  # operational picture lives in memory between rebuilds: a machine that stops
+  # when idle stops ingesting, and a second machine would mean two schedulers
+  # spending the same NASA quota to build two different pictures.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    path = "/api/v1/system/health"
+    method = "GET"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  # Measured 191 MB at rest; 512 MB leaves headroom for a rebuild. Use "1gb" if
+  # you turn imagery on.
+  memory = "512mb"
