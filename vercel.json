@@ -7,6 +7,7 @@
     }
   },
   "rewrites": [
-    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  { "source": "/api/v1/(.*)", "destination": "https://amon-hen-api.fly.dev/api/v1/$1" },
+  { "source": "/(.*)", "destination": { "service": "frontend" } }
   ]
 }
