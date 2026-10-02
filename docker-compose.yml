@@ -19,10 +19,17 @@ services:
       # triggers upstream NASA fetches against your quota — on the local network
       # (café wifi, conference wifi, a shared office). Nothing needs to reach it
       # except the browser on this machine.
-      - "127.0.0.1:8000:8000"
+      #
+      # The published port is a variable because 8000 is a popular default — any
+      # other API on this machine takes it first, and Docker then refuses the
+      # whole stack with "port is already allocated". Set AMONHEN_API_PORT in
+      # .env to move it; the three places that have to agree (this line, the
+      # browser's API address, and the CORS origin) all read the same two
+      # variables, so a conflict is one line to fix rather than three.
+      - "127.0.0.1:${AMONHEN_API_PORT:-8000}:8000"
     environment:
       AMONHEN_ENVIRONMENT: local
-      AMONHEN_CORS_ORIGINS: '["http://localhost:3000"]'
+      AMONHEN_CORS_ORIGINS: '["http://localhost:${AMONHEN_WEB_PORT:-3000}"]'
       # Optional. Without it the platform serves bundled fixtures and says so.
       AMONHEN_FIRMS_MAP_KEY: ${AMONHEN_FIRMS_MAP_KEY:-}
       AMONHEN_POSTGRES_HOST: postgres
@@ -44,9 +51,9 @@ services:
       target: dev
     container_name: amonhen-web
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${AMONHEN_WEB_PORT:-3000}:3000"
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000/api/v1
+      NEXT_PUBLIC_API_BASE: http://localhost:${AMONHEN_API_PORT:-8000}/api/v1
       WATCHPACK_POLLING: "true"   # bind mounts on macOS do not deliver inotify
     volumes:
       - ./frontend:/app

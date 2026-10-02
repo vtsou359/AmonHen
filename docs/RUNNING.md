@@ -265,22 +265,24 @@ a DummySession`. It can be ignored.
 
 ### "port is already allocated"
 
-Another program is already using port 3000 or 8000. Close it, or move Amon Hen
-to a different port by editing `docker-compose.yml`. Change only the number on
-the **left** of each pair, and always in **two places**:
+Something else on your computer is already using port 3000 or 8000 — 8000
+especially, since it is a popular default for other APIs. Amon Hen can move out
+of the way: put a free port in `.env` (make one with `cp .env.example .env` if
+you have none) and start again.
 
-- **Port 8000 is taken:** change `"127.0.0.1:8000:8000"` to
-  `"127.0.0.1:8001:8000"`, **and** change
-  `NEXT_PUBLIC_API_BASE: http://localhost:8000/api/v1` to
-  `http://localhost:8001/api/v1`.
-- **Port 3000 is taken:** change `"127.0.0.1:3000:3000"` to
-  `"127.0.0.1:3001:3000"`, **and** change
-  `AMONHEN_CORS_ORIGINS: '["http://localhost:3000"]'` to
-  `'["http://localhost:3001"]'`. Then open http://localhost:3001 instead.
+```
+AMONHEN_API_PORT=8001
+AMONHEN_WEB_PORT=3001
+```
 
-Then run `docker compose up -d`. If you change only the port, the page opens
-with a red **Cannot reach the Amon Hen API** bar, because it is still looking
-at the old address.
+```bash
+docker compose up -d
+```
+
+Set only the one that clashes. Nothing else needs changing: the address the
+browser calls and the CORS origin both follow these variables, and `make up`
+prints the addresses it actually published. Open the interface at whichever
+`AMONHEN_WEB_PORT` you chose.
 
 ### "Cannot connect to the Docker daemon" or "error during connect"
 

@@ -14,8 +14,10 @@ help: ## Show this help
 
 up: ## Start the platform (http://localhost:3000)
 	docker compose up -d
-	@echo "\n  UI   http://localhost:3000"
-	@echo "  API  http://localhost:8000/docs\n"
+	@# Asks Docker what it actually published rather than assuming 3000/8000,
+	@# which is wrong whenever AMONHEN_WEB_PORT/AMONHEN_API_PORT is set.
+	@echo "\n  UI   http://localhost:$$(docker compose port web 3000 | cut -d: -f2)"
+	@echo "  API  http://localhost:$$(docker compose port api 8000 | cut -d: -f2)/docs\n"
 
 down: ## Stop everything
 	docker compose down
